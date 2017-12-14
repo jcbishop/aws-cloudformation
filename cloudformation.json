@@ -1,0 +1,6088 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Launches OpsWorks stack, layer, instances and associated resources to run a Event Portal application. The application runs inside an Amazon VPC with an LoadBalancer, 2 Public Subnets, 2 Private Subnets, multiple NAT/EC2 instances, REDIS cluster, and MuliAZ RDS DB.",
+  "Parameters": {
+    "Environment": {
+      "Description": "Specify the type of environment you'd like to create",
+      "Type": "String",
+      "MinLength": "2",
+      "MaxLength": "12",
+      "AllowedValues": [
+        "dev",
+        "qaa",
+        "qaa3",
+        "qab",
+        "qac",
+        "reseller",
+        "stage3",
+        "prod"
+      ],
+      "Default": "dev",
+      "ConstraintDescription": "must be in the list [dev, qaa, qaa3, qab, qac, stage3, prod]"
+    },
+    "Version": {
+      "Description": "Specify the type of version of the application you'd like to deploy",
+      "Type": "String",
+      "MinLength": "2",
+      "ConstraintDescription": "version number should follow semantic versioning format.. ie. 1.0.4-RC4"
+    },
+    "VpcId": {
+      "Type": "String",
+      "Description": "VPC ID where you wish to deploy these network resources. Format: vpc-xxxxxxxx",
+      "AllowedPattern": "^vpc-[0-9a-f]{8}$",
+      "ConstraintDescription": "must start with 'vpc-' followed by 8 hexadecimal characters in lowercase.",
+      "MinLength": "12",
+      "MaxLength": "12"
+    },
+    "InternetGatewayId": {
+      "Type": "String",
+      "Description": "Internet Gateway ID for the VPC where you are deploying this solution. Format: igw-xxxxxxxx",
+      "AllowedPattern": "^igw-[0-9a-f]{8}$",
+      "ConstraintDescription": "must start with 'igw-' followed by 8 hexadecimal characters in lowercase."
+    },
+    "VirtualPrivateGatewayId": {
+      "Type": "String",
+      "Description": "Virtual Private Gateway ID for the VPC where you are deploying this solution which allows you to reach back office resources. Format: vgw-xxxxxxxx",
+      "AllowedPattern": "^vgw-[0-9a-f]{8}$",
+      "MinLength": "12",
+      "MaxLength": "12",
+      "ConstraintDescription": "must start with 'vgw-' followed by 8 hexadecimal characters in lowercase."
+    },
+    "AZs": {
+      "Type": "CommaDelimitedList",
+      "Description": "In which 2 Availability Zones do you want to deploy this stack? Enter the AZs as a list of single lowercase characters, choosing from 'a', 'b', or 'c'.",
+      "ConstraintDescription": "must be an AvailabilityZone from a-c expressed as a comma delimited list of single lowercase letters."
+    },
+    "CidrBlock": {
+      "Type": "String",
+      "MinLength": "5",
+      "MaxLength": "11",
+      "Description": "First 3 octets of the /27 CIDR block for this solution.  Ex. If the solution is to be deployed into 10.83.7.0/27, then enter '10.83.7'",
+      "ConstraintDescription": "The first 3 octets of a CIDR prefix string (ex. 10.83.7)",
+      "AllowedPattern": "^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}$"
+    },
+    "NatInstanceIds": {
+      "Type": "CommaDelimitedList",
+      "Description": "Instance IDs of the 2 NAT nodes (one for each AZ) for the VPC where you are deploying.  This allows instances without an EIP to reach the Internet. Format: 'i-xxxxxxxx, i-yyyyyyyy' "
+    },
+    "SSLCertificateName": {
+      "Description": "Name of the SSL certificate for the public Load Balancer",
+      "Type": "String",
+      "MinLength": "8",
+      "MaxLength": "255"
+    },
+    "ELBCnameAlias": {
+      "Description": "DNS Alias mapped to the public Load Balancer DNS entry",
+      "Type": "String",
+      "MinLength": "8",
+      "MaxLength": "255"
+    },
+    "CDNSSLCertificateID": {
+      "Description": "ID of the SSL certificate for our CNAME'd Cloudfront domain.  NOTE: This certificate must also be in the IAM certificate store for the current AWS account.  You will need to upload it there if it is not.",
+      "Type": "String",
+      "MinLength": "8",
+      "MaxLength": "255"
+    },
+    "CDNCnameAlias": {
+      "Description": "DNS Alias mapped to the Cloudfront distribution DNS entry",
+      "Type": "String",
+      "MinLength": "8",
+      "MaxLength": "255"
+    },
+    "KeyName": {
+      "Description": "Name of an existing EC2 KeyPair to enable SSH access to the instances",
+      "Type": "AWS::EC2::KeyPair::KeyName",
+      "Default": "gsa"
+    },
+    "DBPassword": {
+      "NoEcho": "true",
+      "Description": "Admin password for MySQL database access",
+      "Type": "String",
+      "MinLength": "8",
+      "MaxLength": "41",
+      "ConstraintDescription": "must contain only ASCII characters."
+    },
+    "AssetBucket": {
+      "Type": "String",
+      "Description": "S3 bucket for application assets and uploads.",
+      "MinLength": "3",
+      "MaxLength": "255",
+      "AllowedPattern": "[\\x20-\\x7E]*",
+      "ConstraintDescription": "can contain only ASCII characters."
+    },
+    "MandrillApiKey": {
+      "Type": "String",
+      "Description": "Mandrill Api Key - Specific for each environment",
+      "MinLength": "5",
+      "MaxLength": "256",
+      "ConstraintDescription": "can contain only ASCII characters."
+    },
+    "MandrillApiUser": {
+      "Type": "String",
+      "Description": "Mandrill Api User - Specific for each environment",
+      "MinLength": "5",
+      "MaxLength": "24",
+      "ConstraintDescription": "can contain only ASCII characters."
+    },
+    "MandrillApiPwd": {
+      "Type": "String",
+      "Description": "Mandrill Api Password - Specific for each environment",
+      "MinLength": "5",
+      "MaxLength": "128",
+      "ConstraintDescription": "can contain only ASCII characters."
+    },
+    "PGiWebServicesPrefix": {
+      "Type": "String",
+      "Description": "PGi Web Services Prefix",
+      "MinLength": "12",
+      "MaxLength": "512",
+      "ConstraintDescription": "must be a valid Url"
+    },
+    "PGiWebServicesId": {
+      "Type": "String",
+      "Description": "PGi Web Services Id",
+      "MinLength": "6",
+      "MaxLength": "512",
+      "ConstraintDescription": "can contain number characters."
+    },
+    "PGiWebServicesPwd": {
+      "Type": "String",
+      "Description": "PGi Web Services Password",
+      "MinLength": "2",
+      "MaxLength": "512",
+      "ConstraintDescription": "can contain ASCII characters."
+    },
+    "PGiSecurityUrl": {
+      "Type": "String",
+      "Description": "PGi Web Services Security URL",
+      "MinLength": "2",
+      "MaxLength": "2048",
+      "ConstraintDescription": "can contain ASCII characters."
+    },
+    "PGiServicesUrl": {
+      "Type": "String",
+      "Description": "PGi Web Services  URL",
+      "MinLength": "2",
+      "MaxLength": "2048",
+      "ConstraintDescription": "can contain ASCII characters."
+    },
+    "PGiProfilesUrl": {
+      "Type": "String",
+      "Description": "PGi Web Services Profiles URL",
+      "MinLength": "2",
+      "MaxLength": "2048",
+      "ConstraintDescription": "can contain ASCII characters."
+    },
+    "PGiInMeetingUrl": {
+      "Type": "String",
+      "Description": "PGi Web Services In Meeting URL",
+      "MinLength": "2",
+      "MaxLength": "2048",
+      "ConstraintDescription": "can contain ASCII characters."
+    },
+    "PGiRefreshUrl": {
+      "Type": "String",
+      "Description": "PGi Web Services Refresh URL",
+      "MinLength": "2",
+      "MaxLength": "2048",
+      "ConstraintDescription": "can contain ASCII characters."
+    },
+    "PGiLegacyUrl": {
+      "Type": "String",
+      "Description": "Legacy Url",
+      "MinLength": "2",
+      "MaxLength": "4096",
+      "ConstraintDescription": "can contain ASCII characters."
+    },
+    "PGiAssistanceUrl": {
+      "Type": "String",
+      "Description": "Assistance Url.",
+      "MinLength": "2",
+      "MaxLength": "1024",
+      "ConstraintDescription": "can contain ASCII characters."
+    },
+    "SystemCheckUrl": {
+      "Type": "String",
+      "Description": "System Check Url.",
+      "MinLength": "2",
+      "MaxLength": "1024",
+      "ConstraintDescription": "can contain ASCII characters."
+    },
+    "GMDetectUrl": {
+      "Type": "String",
+      "Description": "GMDetect swf Url.",
+      "MinLength": "2",
+      "MaxLength": "1024",
+      "ConstraintDescription": "can contain ASCII characters."
+    },
+    "PGiClientGetSoapEnvelope": {
+      "Type": "String",
+      "Description": "SOAP Envelope for making http request posts to PGi WebServices.",
+      "MinLength": "2",
+      "MaxLength": "4096",
+      "ConstraintDescription": "can contain ASCII characters."
+    },
+    "ClientPwd": {
+      "Type": "String",
+      "Description": "PGi client password",
+      "MinLength": "2",
+      "MaxLength": "512",
+      "ConstraintDescription": "can contain ASCII characters."
+    },
+    "S3OriginId": {
+      "Type": "String",
+      "Description": "S3 Origin Id in this AWS account to use to restrict access to S3 asset bucket thru Cloudfront only",
+      "MinLength": "3",
+      "MaxLength": "255",
+      "AllowedPattern": "[\\x20-\\x7E]*",
+      "ConstraintDescription": "can contain only ASCII characters."
+    },
+    "OriginAccessIdentityCanonicalUser": {
+      "Type": "String",
+      "Description": "Canonical User Id of the Origin Access Id associated with the S3 asset bucket",
+      "MinLength": "3",
+      "MaxLength": "255",
+      "AllowedPattern": "[\\x20-\\x7E]*",
+      "ConstraintDescription": "can contain only ASCII characters."
+    },
+    "DigestEmailAddress": {
+      "Type": "String",
+      "Description": "Admin email address to send weekly digest email reports to",
+      "MinLength": "9",
+      "MaxLength": "255",
+      "AllowedPattern": "[\\x20-\\x7E]*",
+      "ConstraintDescription": "can contain only ASCII characters."
+    },
+    "OrganizerEmailAddress": {
+      "Type": "String",
+      "Description": "ICS organizer email address",
+      "MinLength": "9",
+      "MaxLength": "255",
+      "AllowedPattern": "[\\x20-\\x7E]*",
+      "ConstraintDescription": "can contain only ASCII characters."
+    },
+    "SumologicAccessID": {
+      "Description": "Sumologic AccessID to use for creating a collector",
+      "NoEcho": "true",
+      "Type": "String",
+      "MinLength": "1",
+      "MaxLength": "255",
+      "AllowedPattern": "[\\x20-\\x7E]*",
+      "ConstraintDescription": "can contain only ASCII characters."
+    },
+    "SumologicAccessKey": {
+      "Description": "Sumologic AccessKey to use for creating a collector",
+      "NoEcho": "true",
+      "Type": "String",
+      "MinLength": "1",
+      "MaxLength": "255",
+      "AllowedPattern": "[\\x20-\\x7E]*",
+      "ConstraintDescription": "can contain only ASCII characters."
+    },
+    "RepoBucket": {
+      "Type": "String",
+      "Description": "S3 Bucket containing the application deployment unit and cookbook",
+      "Default": "bob-repo",
+      "MinLength": "3",
+      "MaxLength": "255",
+      "AllowedPattern": "[\\x20-\\x7E]*",
+      "ConstraintDescription": "can contain only ASCII characters."
+    },
+    "DiagnosticsBucket": {
+      "Type": "String",
+      "Description": "S3 bucket name for diagnostics logs such as ELB access logs e.g. pgi-diagnostics-<accountname>] - may contain alphanumeric characters, periods, dashes and underscores",
+      "MinLength": "1",
+      "MaxLength": "255",
+      "AllowedPattern": "[\\x20-\\x7E]*",
+      "ConstraintDescription": "can contain only ASCII characters."
+    },
+    "LoggingPath": {
+      "Type": "String",
+      "Description": "Path to the access logging directory within the diagnostic logging bucket e.g. elb-access-logs/event-portal/prod (remember not to end this in a forward slash!)",
+      "MinLength": "12",
+      "MaxLength": "1024",
+      "AllowedPattern": "[\\x20-\\x7E]*",
+      "ConstraintDescription": "can contain only ASCII characters."
+    }
+  },
+  "Resources": {
+    "PublicRouteTable": {
+      "Type": "AWS::EC2::RouteTable",
+      "Properties": {
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "Tags": [
+          {
+            "Key": "Network",
+            "Value": "Public"
+          },
+          {
+            "Key": "Name",
+            "Value": "Event Portal Public Route Table"
+          },
+          {
+            "Key": "Name",
+            "Value": "EventPortal Public Route Table"
+          }
+        ]
+      }
+    },
+    "PublicRoute": {
+      "Type": "AWS::EC2::Route",
+      "Properties": {
+        "RouteTableId": {
+          "Ref": "PublicRouteTable"
+        },
+        "DestinationCidrBlock": "0.0.0.0/0",
+        "GatewayId": {
+          "Ref": "InternetGatewayId"
+        }
+      }
+    },
+    "SubnetPublic0": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "CidrBlock": {
+          "Fn::Join": [
+            "",
+            [
+              {
+                "Ref": "CidrBlock"
+              },
+              ".",
+              "0/27"
+            ]
+          ]
+        },
+        "AvailabilityZone": {
+          "Fn::Join": [
+            "",
+            [
+              {
+                "Ref": "AWS::Region"
+              },
+              {
+                "Fn::Select": [
+                  0,
+                  {
+                    "Ref": "AZs"
+                  }
+                ]
+              }
+            ]
+          ]
+        },
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "Tags": [
+          {
+            "Key": "Zone",
+            "Value": {
+              "Fn::Join": [
+                "",
+                [
+                  {
+                    "Ref": "AWS::Region"
+                  },
+                  {
+                    "Fn::Select": [
+                      0,
+                      {
+                        "Ref": "AZs"
+                      }
+                    ]
+                  }
+                ]
+              ]
+            }
+          },
+          {
+            "Key": "Network",
+            "Value": "Public"
+          },
+          {
+            "Key": "Name",
+            "Value": "Event Portal Subnet Public 0"
+          },
+          {
+            "Key": "Name",
+            "Value": "EventPortal Subnet Public 0"
+          }
+        ]
+      }
+    },
+    "PublicSubnetRouteTableAssociation0": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties": {
+        "SubnetId": {
+          "Ref": "SubnetPublic0"
+        },
+        "RouteTableId": {
+          "Ref": "PublicRouteTable"
+        }
+      }
+    },
+    "SubnetPublic1": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "CidrBlock": {
+          "Fn::Join": [
+            "",
+            [
+              {
+                "Ref": "CidrBlock"
+              },
+              ".",
+              "32/27"
+            ]
+          ]
+        },
+        "AvailabilityZone": {
+          "Fn::Join": [
+            "",
+            [
+              {
+                "Ref": "AWS::Region"
+              },
+              {
+                "Fn::Select": [
+                  1,
+                  {
+                    "Ref": "AZs"
+                  }
+                ]
+              }
+            ]
+          ]
+        },
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "Tags": [
+          {
+            "Key": "Zone",
+            "Value": {
+              "Fn::Join": [
+                "",
+                [
+                  {
+                    "Ref": "AWS::Region"
+                  },
+                  {
+                    "Fn::Select": [
+                      1,
+                      {
+                        "Ref": "AZs"
+                      }
+                    ]
+                  }
+                ]
+              ]
+            }
+          },
+          {
+            "Key": "Network",
+            "Value": "Public"
+          },
+          {
+            "Key": "Name",
+            "Value": "Event Portal Subnet Public 1"
+          },
+          {
+            "Key": "Name",
+            "Value": "EventPortal Subnet Public 1"
+          }
+        ]
+      }
+    },
+    "PublicSubnetRouteTableAssociation1": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties": {
+        "SubnetId": {
+          "Ref": "SubnetPublic1"
+        },
+        "RouteTableId": {
+          "Ref": "PublicRouteTable"
+        }
+      }
+    },
+    "SubnetPrivate0": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "CidrBlock": {
+          "Fn::Join": [
+            "",
+            [
+              {
+                "Ref": "CidrBlock"
+              },
+              ".",
+              "64/27"
+            ]
+          ]
+        },
+        "AvailabilityZone": {
+          "Fn::Join": [
+            "",
+            [
+              {
+                "Ref": "AWS::Region"
+              },
+              {
+                "Fn::Select": [
+                  0,
+                  {
+                    "Ref": "AZs"
+                  }
+                ]
+              }
+            ]
+          ]
+        },
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "Tags": [
+          {
+            "Key": "Zone",
+            "Value": {
+              "Fn::Join": [
+                "",
+                [
+                  {
+                    "Ref": "AWS::Region"
+                  },
+                  {
+                    "Fn::Select": [
+                      0,
+                      {
+                        "Ref": "AZs"
+                      }
+                    ]
+                  }
+                ]
+              ]
+            }
+          },
+          {
+            "Key": "Network",
+            "Value": "Private"
+          },
+          {
+            "Key": "Name",
+            "Value": "Event Portal Subnet Private 0"
+          },
+          {
+            "Key": "Name",
+            "Value": "EventPortal Subnet Private 0"
+          }
+        ]
+      }
+    },
+    "PrivateRouteTable0": {
+      "Type": "AWS::EC2::RouteTable",
+      "Properties": {
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "Tags": [
+          {
+            "Key": "Network",
+            "Value": "Private"
+          },
+          {
+            "Key": "Name",
+            "Value": "Event Portal Private Route Table 0"
+          },
+          {
+            "Key": "Name",
+            "Value": "EventPortal Private Route Table 0"
+          }
+        ]
+      }
+    },
+    "PrivateSubnetRouteTableAssociation0": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties": {
+        "SubnetId": {
+          "Ref": "SubnetPrivate0"
+        },
+        "RouteTableId": {
+          "Ref": "PrivateRouteTable0"
+        }
+      }
+    },
+    "PrivateRoute0": {
+      "Type": "AWS::EC2::Route",
+      "DependsOn": "PrivateRouteTable0",
+      "Properties": {
+        "RouteTableId": {
+          "Ref": "PrivateRouteTable0"
+        },
+        "DestinationCidrBlock": "0.0.0.0/0",
+        "InstanceId": {
+          "Fn::Select": [
+            0,
+            {
+              "Ref": "NatInstanceIds"
+            }
+          ]
+        }
+      }
+    },
+    "PrivateRouteToPGI0": {
+      "Type": "AWS::EC2::Route",
+      "DependsOn": "PrivateRouteTable0",
+      "Properties": {
+        "RouteTableId": {
+          "Ref": "PrivateRouteTable0"
+        },
+        "DestinationCidrBlock": "10.0.0.0/8",
+        "GatewayId": {
+          "Ref": "VirtualPrivateGatewayId"
+        }
+      }
+    },
+    "Instance0": {
+      "Type": "AWS::OpsWorks::Instance",
+      "DependsOn": "EventPortalServiceLayer",
+      "Properties": {
+        "StackId": {
+          "Ref": "EventPortalStack"
+        },
+        "LayerIds": [
+          {
+            "Ref": "EventPortalServiceLayer"
+          }
+        ],
+        "InstanceType": "m3.medium",
+        "InstallUpdatesOnBoot": true,
+        "SubnetId": {
+          "Ref": "SubnetPrivate0"
+        }
+      }
+    },
+    "SubnetPrivate1": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "CidrBlock": {
+          "Fn::Join": [
+            "",
+            [
+              {
+                "Ref": "CidrBlock"
+              },
+              ".",
+              "96/27"
+            ]
+          ]
+        },
+        "AvailabilityZone": {
+          "Fn::Join": [
+            "",
+            [
+              {
+                "Ref": "AWS::Region"
+              },
+              {
+                "Fn::Select": [
+                  1,
+                  {
+                    "Ref": "AZs"
+                  }
+                ]
+              }
+            ]
+          ]
+        },
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "Tags": [
+          {
+            "Key": "Zone",
+            "Value": {
+              "Fn::Join": [
+                "",
+                [
+                  {
+                    "Ref": "AWS::Region"
+                  },
+                  {
+                    "Fn::Select": [
+                      1,
+                      {
+                        "Ref": "AZs"
+                      }
+                    ]
+                  }
+                ]
+              ]
+            }
+          },
+          {
+            "Key": "Network",
+            "Value": "Private"
+          },
+          {
+            "Key": "Name",
+            "Value": "Event Portal Subnet Private 1"
+          },
+          {
+            "Key": "Name",
+            "Value": "EventPortal Subnet Private 1"
+          }
+        ]
+      }
+    },
+    "PrivateRouteTable1": {
+      "Type": "AWS::EC2::RouteTable",
+      "Properties": {
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "Tags": [
+          {
+            "Key": "Network",
+            "Value": "Private"
+          },
+          {
+            "Key": "Name",
+            "Value": "Event Portal Private Route Table 1"
+          },
+          {
+            "Key": "Name",
+            "Value": "EventPortal Private Route Table 1"
+          }
+        ]
+      }
+    },
+    "PrivateSubnetRouteTableAssociation1": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties": {
+        "SubnetId": {
+          "Ref": "SubnetPrivate1"
+        },
+        "RouteTableId": {
+          "Ref": "PrivateRouteTable1"
+        }
+      }
+    },
+    "PrivateRoute1": {
+      "Type": "AWS::EC2::Route",
+      "DependsOn": "PrivateRouteTable1",
+      "Properties": {
+        "RouteTableId": {
+          "Ref": "PrivateRouteTable1"
+        },
+        "DestinationCidrBlock": "0.0.0.0/0",
+        "InstanceId": {
+          "Fn::Select": [
+            1,
+            {
+              "Ref": "NatInstanceIds"
+            }
+          ]
+        }
+      }
+    },
+    "PrivateRouteToPGI1": {
+      "Type": "AWS::EC2::Route",
+      "DependsOn": "PrivateRouteTable1",
+      "Properties": {
+        "RouteTableId": {
+          "Ref": "PrivateRouteTable1"
+        },
+        "DestinationCidrBlock": "10.0.0.0/8",
+        "GatewayId": {
+          "Ref": "VirtualPrivateGatewayId"
+        }
+      }
+    },
+    "Instance1": {
+      "Type": "AWS::OpsWorks::Instance",
+      "DependsOn": [
+        "Instance0",
+        "EventPortalServiceLayer"
+      ],
+      "Properties": {
+        "StackId": {
+          "Ref": "EventPortalStack"
+        },
+        "LayerIds": [
+          {
+            "Ref": "EventPortalServiceLayer"
+          }
+        ],
+        "InstanceType": "m3.medium",
+        "InstallUpdatesOnBoot": true,
+        "SubnetId": {
+          "Ref": "SubnetPrivate1"
+        }
+      }
+    },
+    "LoadBalancer": {
+      "Type": "AWS::ElasticLoadBalancing::LoadBalancer",
+      "Properties": {
+        "Subnets": [
+          {
+            "Ref": "SubnetPublic0"
+          },
+          {
+            "Ref": "SubnetPublic1"
+          }
+        ],
+        "HealthCheck": {
+          "Target": "HTTP:8080/ui/health.html",
+          "Interval": "30",
+          "Timeout": "5",
+          "UnhealthyThreshold": "2",
+          "HealthyThreshold": "10"
+        },
+        "SecurityGroups": [
+          {
+            "Ref": "LoadBalancerSecurityGroup"
+          }
+        ],
+        "Listeners": [
+          {
+            "InstancePort": "8080",
+            "LoadBalancerPort": "443",
+            "Protocol": "HTTPS",
+            "InstanceProtocol": "HTTP",
+            "SSLCertificateId": {
+              "Fn::Join": [
+                "",
+                [
+                  "arn:aws:iam::",
+                  {
+                    "Ref": "AWS::AccountId"
+                  },
+                  ":server-certificate/",
+                  {
+                    "Ref": "SSLCertificateName"
+                  }
+                ]
+              ]
+            }
+          }
+        ],
+        "AccessLoggingPolicy": {
+          "EmitInterval": "5",
+          "Enabled": true,
+          "S3BucketName": {
+            "Ref": "DiagnosticsBucket"
+          },
+          "S3BucketPrefix": {
+            "Ref": "LoggingPath"
+          }
+        }
+      }
+    },
+    "LoadBalancerAttachment": {
+      "Type": "AWS::OpsWorks::ElasticLoadBalancerAttachment",
+      "Properties": {
+        "ElasticLoadBalancerName": {
+          "Ref": "LoadBalancer"
+        },
+        "LayerId": {
+          "Ref": "EventPortalServiceLayer"
+        }
+      }
+    },
+    "EventPortalUser": {
+      "Type": "AWS::IAM::User"
+    },
+    "EventPortalUserKey": {
+      "Type": "AWS::IAM::AccessKey",
+      "Properties": {
+        "UserName": {
+          "Ref": "EventPortalUser"
+        }
+      }
+    },
+    "EventPortalGroup": {
+      "Type": "AWS::IAM::Group",
+      "Properties": {
+        "Policies": [
+          {
+            "PolicyName": "EventPortalS3GroupPolicy",
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Action": [
+                    "s3:GetBucketLocation",
+                    "s3:ListAllMyBuckets"
+                  ],
+                  "Effect": "Allow",
+                  "Resource": [
+                    "arn:aws:s3:::*"
+                  ]
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:List*",
+                    "s3:Get*"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::Join": [
+                        "",
+                        [
+                          "arn:aws:s3:::",
+                          {
+                            "Ref": "RepoBucket"
+                          },
+                          "/globalmeet-seminar/*"
+                        ]
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "AddUserToEventPortalGroup": {
+      "Type": "AWS::IAM::UserToGroupAddition",
+      "Properties": {
+        "GroupName": {
+          "Ref": "EventPortalGroup"
+        },
+        "Users": [
+          {
+            "Ref": "EventPortalUser"
+          }
+        ]
+      }
+    },
+    "EventPortalStack": {
+      "Type": "AWS::OpsWorks::Stack",
+      "Properties": {
+        "Name": {
+          "Ref": "AWS::StackName"
+        },
+        "ServiceRoleArn": {
+          "Fn::GetAtt": [
+            "OpsWorksServiceRole",
+            "Arn"
+          ]
+        },
+        "DefaultInstanceProfileArn": {
+          "Fn::GetAtt": [
+            "OpsWorksInstanceProfile",
+            "Arn"
+          ]
+        },
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "DefaultSubnetId": {
+          "Ref": "SubnetPrivate1"
+        },
+        "DefaultSshKeyName": {
+          "Ref": "KeyName"
+        },
+        "ConfigurationManager": {
+          "Name": "Chef",
+          "Version": "11.10"
+        },
+        "UseCustomCookbooks": "true",
+        "CustomCookbooksSource": {
+          "Type": "s3",
+          "Url": {
+            "Fn::Join": [
+              "",
+              [
+                "https://",
+                {
+                  "Ref": "RepoBucket"
+                },
+                ".s3.amazonaws.com/globalmeet-seminar/cookbook-",
+                {
+                  "Ref": "Version"
+                },
+                ".tar.gz"
+              ]
+            ]
+          },
+          "Username": {
+            "Ref": "EventPortalUserKey"
+          },
+          "Password": {
+            "Fn::GetAtt": [
+              "EventPortalUserKey",
+              "SecretAccessKey"
+            ]
+          }
+        },
+        "CustomJson": {
+          "event_portal": {
+            "environment": {
+              "Ref": "Environment"
+            },
+            "version": {
+              "Ref": "Version"
+            },
+            "asset_bucket": {
+              "Ref": "AssetBucket"
+            },
+            "repo_bucket": {
+              "Ref": "RepoBucket"
+            },
+            "host": {
+              "Ref": "ELBCnameAlias"
+            },
+            "cloudfront_url": {
+              "Fn::Join": [
+                "",
+                [
+                  "https://",
+                  {
+                    "Ref": "CDNCnameAlias"
+                  }
+                ]
+              ]
+            },
+            "digest_email_address": {
+              "Ref": "DigestEmailAddress"
+            },
+            "organizer_email_address": {
+              "Ref": "OrganizerEmailAddress"
+            }
+          },
+          "database": {
+            "host": {
+              "Fn::GetAtt": [
+                "RDSInstance",
+                "Endpoint.Address"
+              ]
+            },
+            "port": {
+              "Fn::GetAtt": [
+                "RDSInstance",
+                "Endpoint.Port"
+              ]
+            },
+            "name": "event_portal",
+            "username": "master",
+            "password": {
+              "Ref": "DBPassword"
+            },
+            "reconnect": true
+          },
+          "redis": {
+            "cluster_id": {
+              "Ref": "AWS::StackName"
+            }
+          },
+          "pgi": {
+            "web_services_prefix": {
+              "Ref": "PGiWebServicesPrefix"
+            },
+            "web_services_id": {
+              "Ref": "PGiWebServicesId"
+            },
+            "web_services_password": {
+              "Ref": "PGiWebServicesPwd"
+            },
+            "security_url": {
+              "Ref": "PGiSecurityUrl"
+            },
+            "services_url": {
+              "Ref": "PGiServicesUrl"
+            },
+            "profile_url": {
+              "Ref": "PGiProfilesUrl"
+            },
+            "in_meeting_url": {
+              "Ref": "PGiInMeetingUrl"
+            },
+            "refresh_url": {
+              "Ref": "PGiRefreshUrl"
+            },
+            "legacy_base_url": {
+              "Ref": "PGiLegacyUrl"
+            },
+            "web_assistance_url": {
+              "Ref": "PGiAssistanceUrl"
+            },
+            "system_check_url": {
+              "Ref": "SystemCheckUrl"
+            },
+            "gmdetect_url": {
+              "Ref": "GMDetectUrl"
+            },
+            "client_password": {
+              "Ref": "ClientPwd"
+            },
+            "clientget_soapenvelope": {
+              "Ref": "PGiClientGetSoapEnvelope"
+            }
+          },
+          "mandrill": {
+            "user": {
+              "Ref": "MandrillApiUser"
+            },
+            "pass": {
+              "Ref": "MandrillApiPwd"
+            },
+            "api_key": {
+              "Ref": "MandrillApiKey"
+            }
+          },
+          "opsworks": {
+            "data_bags": {
+              "sumo-creds": {
+                "api-creds": {
+                  "accessID": {
+                    "Ref": "SumologicAccessID"
+                  },
+                  "accessKey": {
+                    "Ref": "SumologicAccessKey"
+                  }
+                }
+              }
+            },
+            "ruby_version": "2.0.0"
+          },
+          "ruby": {
+            "patch_version": "p647"
+          }
+        }
+      }
+    },
+    "EventPortalServiceLayer": {
+      "Type": "AWS::OpsWorks::Layer",
+      "Metadata": {
+        "Comment": "OpsWorks instances require outbound Internet access. Using DependsOn to make sure outbound Internet Access is estlablished before creating instances in this layer."
+      },
+      "DependsOn": [
+        "PublicRoute",
+        "SubnetPublic0",
+        "SubnetPublic1",
+        "SubnetPrivate0",
+        "SubnetPrivate1"
+      ],
+      "Properties": {
+        "StackId": {
+          "Ref": "EventPortalStack"
+        },
+        "Name": {
+          "Ref": "AWS::StackName"
+        },
+        "Type": "custom",
+        "Shortname": "event_portal",
+        "EnableAutoHealing": "true",
+        "AutoAssignElasticIps": "false",
+        "AutoAssignPublicIps": "false",
+        "CustomSecurityGroupIds": [
+          {
+            "Ref": "WebServerSecurityGroup"
+          }
+        ],
+        "CustomRecipes": {
+          "Setup": [
+            "event_portal::default"
+          ]
+        }
+      }
+    },
+    "OpsWorksServiceRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": [
+                  "opsworks.amazonaws.com"
+                ]
+              },
+              "Action": [
+                "sts:AssumeRole"
+              ]
+            }
+          ]
+        },
+        "Path": "/",
+        "Policies": [
+          {
+            "PolicyName": "opsworks-service",
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "ec2:*",
+                    "s3:*",
+                    "iam:PassRole",
+                    "cloudwatch:GetMetricStatistics",
+                    "elasticloadbalancing:*"
+                  ],
+                  "Resource": "*"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "OpsWorksInstanceRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": [
+                  "ec2.amazonaws.com"
+                ]
+              },
+              "Action": [
+                "sts:AssumeRole"
+              ]
+            }
+          ]
+        },
+        "Path": "/",
+        "Policies": [
+          {
+            "PolicyName": "opsworks-instance",
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "elasticache:*",
+                    "s3:*",
+                    "ec2:*",
+                    "elasticloadbalancing:*",
+                    "iam:PassRole",
+                    "cloudwatch:PutMetricData",
+                    "cloudwatch:GetMetricStatistics",
+                    "cloudwatch:ListMetrics",
+                    "ec2:DescribeTags"
+                  ],
+                  "Resource": "*"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "OpsWorksInstanceProfile": {
+      "Type": "AWS::IAM::InstanceProfile",
+      "Properties": {
+        "Path": "/",
+        "Roles": [
+          {
+            "Ref": "OpsWorksInstanceRole"
+          }
+        ]
+      }
+    },
+    "LoadBalancerSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Enable only SSL traffic from internet on port 443",
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": "443",
+            "ToPort": "443",
+            "CidrIp": "0.0.0.0/0"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Network",
+            "Value": "Public"
+          },
+          {
+            "Key": "Name",
+            "Value": "Event Portal Load Balancer Security Group"
+          },
+          {
+            "Key": "Name",
+            "Value": "EventPortal Load Balancer Security Group"
+          }
+        ]
+      }
+    },
+    "WebServerSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Allow inbound requests from the LoadBalancer to the OpsWorks instances",
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": "8080",
+            "ToPort": "8080",
+            "SourceSecurityGroupId": {
+              "Ref": "LoadBalancerSecurityGroup"
+            }
+          }
+        ],
+        "SecurityGroupEgress": [
+          {
+            "IpProtocol": "-1",
+            "CidrIp": "0.0.0.0/0"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Network",
+            "Value": "Private"
+          },
+          {
+            "Key": "Name",
+            "Value": "Event Portal Web Server Security Group"
+          },
+          {
+            "Key": "Name",
+            "Value": "EventPortal Web Server Security Group"
+          }
+        ]
+      }
+    },
+    "NATSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Enable internal access to the NAT device",
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "-1",
+            "SourceSecurityGroupId": {
+              "Ref": "WebServerSecurityGroup"
+            }
+          }
+        ],
+        "SecurityGroupEgress": [
+          {
+            "IpProtocol": "-1",
+            "CidrIp": "0.0.0.0/0"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Network",
+            "Value": "Private"
+          },
+          {
+            "Key": "Name",
+            "Value": "Event Portal NATSecurity Group"
+          },
+          {
+            "Key": "Name",
+            "Value": "EventPortal NATSecurity Group"
+          }
+        ]
+      }
+    },
+    "ElasticCacheSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Lock down access to cache only to webserver instances",
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": "6379",
+            "ToPort": "6379",
+            "SourceSecurityGroupId": {
+              "Ref": "WebServerSecurityGroup"
+            }
+          }
+        ],
+        "SecurityGroupEgress": [
+          {
+            "IpProtocol": "-1",
+            "CidrIp": "0.0.0.0/0"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Network",
+            "Value": "Private"
+          },
+          {
+            "Key": "Name",
+            "Value": "Event Portal Elastic Cache Security Group"
+          },
+          {
+            "Key": "Name",
+            "Value": "EventPortal Elastic Cache Security Group"
+          }
+        ]
+      }
+    },
+    "DBSecurityGroup": {
+      "Type": "AWS::RDS::DBSecurityGroup",
+      "Properties": {
+        "GroupDescription": "DB access from webservers",
+        "EC2VpcId": {
+          "Ref": "VpcId"
+        },
+        "DBSecurityGroupIngress": [
+          {
+            "EC2SecurityGroupId": {
+              "Fn::GetAtt": [
+                "WebServerSecurityGroup",
+                "GroupId"
+              ]
+            }
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Network",
+            "Value": "Private"
+          },
+          {
+            "Key": "Name",
+            "Value": "Event Portal DBSecurity Group"
+          },
+          {
+            "Key": "Name",
+            "Value": "EventPortal DBSecurity Group"
+          }
+        ]
+      }
+    },
+    "S3Bucket": {
+      "Type": "AWS::S3::Bucket",
+      "Properties": {
+        "BucketName": {
+          "Ref": "AssetBucket"
+        },
+        "AccessControl": "PublicRead",
+        "Tags": [
+          {
+            "Key": "Network",
+            "Value": "Public"
+          },
+          {
+            "Key": "Name",
+            "Value": "EventPortal S3 Bucket"
+          }
+        ],
+        "CorsConfiguration": {
+          "CorsRules": [
+            {
+              "AllowedHeaders": [
+                "Authorization"
+              ],
+              "AllowedOrigins": [
+                "*"
+              ],
+              "AllowedMethods": [
+                "GET"
+              ],
+              "MaxAge": "3000"
+            }
+          ]
+        }
+      }
+    },
+    "AssetBucketPolicy": {
+      "Type": "AWS::S3::BucketPolicy",
+      "DependsOn": "S3Bucket",
+      "Properties": {
+        "PolicyDocument": {
+          "Id": "EventPortalAssetBucketPolicy",
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "ReadAccess",
+              "Action": [
+                "s3:GetObject"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    "arn:aws:s3:::",
+                    {
+                      "Ref": "AssetBucket"
+                    },
+                    "/*"
+                  ]
+                ]
+              },
+              "Principal": {
+                "CanonicalUser": {
+                  "Ref": "OriginAccessIdentityCanonicalUser"
+                }
+              }
+            }
+          ]
+        },
+        "Bucket": {
+          "Ref": "AssetBucket"
+        }
+      }
+    },
+    "CloudfrontDistribution": {
+      "Type": "AWS::CloudFront::Distribution",
+      "DependsOn": "S3Bucket",
+      "Properties": {
+        "DistributionConfig": {
+          "Comment": "Event Portal static assets",
+          "Enabled": "true",
+          "Aliases": [
+            {
+              "Ref": "CDNCnameAlias"
+            }
+          ],
+          "Origins": [
+            {
+              "DomainName": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Ref": "AssetBucket"
+                    },
+                    ".s3.amazonaws.com"
+                  ]
+                ]
+              },
+              "Id": "EventPortalS3Origin",
+              "S3OriginConfig": {
+                "OriginAccessIdentity": {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "origin-access-identity/cloudfront/",
+                      {
+                        "Ref": "S3OriginId"
+                      }
+                    ]
+                  ]
+                }
+              }
+            }
+          ],
+          "ViewerCertificate": {
+            "IamCertificateId": {
+              "Ref": "CDNSSLCertificateID"
+            },
+            "SslSupportMethod": "sni-only"
+          },
+          "DefaultRootObject": "index.html",
+          "Logging": {
+            "Bucket": {
+              "Fn::Join": [
+                "",
+                [
+                  "pgi-logs-",
+                  {
+                    "Ref": "AWS::Region"
+                  },
+                  "-development.s3.amazonaws.com"
+                ]
+              ]
+            },
+            "Prefix": "event-portal"
+          },
+          "DefaultCacheBehavior": {
+            "TargetOriginId": "EventPortalS3Origin",
+            "ForwardedValues": {
+              "QueryString": "true"
+            },
+            "ViewerProtocolPolicy": "redirect-to-https"
+          }
+        }
+      }
+    },
+    "ElasticCacheSubnetGroup": {
+      "Type": "AWS::ElastiCache::SubnetGroup",
+      "Properties": {
+        "Description": "Event Portal Private access to cache from instances",
+        "SubnetIds": [
+          {
+            "Ref": "SubnetPrivate0"
+          },
+          {
+            "Ref": "SubnetPrivate1"
+          }
+        ]
+      }
+    },
+    "ElasticCacheCluster": {
+      "Type": "AWS::ElastiCache::CacheCluster",
+      "Properties": {
+        "ClusterName": {
+          "Ref": "AWS::StackName"
+        },
+        "CacheNodeType": "cache.m3.medium",
+        "Engine": "redis",
+        "EngineVersion": "2.8.6",
+        "NumCacheNodes": "1",
+        "CacheSubnetGroupName": {
+          "Ref": "ElasticCacheSubnetGroup"
+        },
+        "VpcSecurityGroupIds": [
+          {
+            "Fn::GetAtt": [
+              "ElasticCacheSecurityGroup",
+              "GroupId"
+            ]
+          }
+        ],
+        "PreferredAvailabilityZone": {
+          "Fn::Join": [
+            "",
+            [
+              {
+                "Ref": "AWS::Region"
+              },
+              {
+                "Fn::Select": [
+                  0,
+                  {
+                    "Ref": "AZs"
+                  }
+                ]
+              }
+            ]
+          ]
+        },
+        "PreferredMaintenanceWindow": "wed:03:00-wed:04:00",
+        "AutoMinorVersionUpgrade": "true"
+      }
+    },
+    "DBSubnetGroup": {
+      "Type": "AWS::RDS::DBSubnetGroup",
+      "Properties": {
+        "DBSubnetGroupDescription": "Event Portal Private access to DB from instances",
+        "SubnetIds": [
+          {
+            "Ref": "SubnetPrivate0"
+          },
+          {
+            "Ref": "SubnetPrivate1"
+          }
+        ]
+      }
+    },
+    "RDSInstance": {
+      "Type": "AWS::RDS::DBInstance",
+      "Properties": {
+        "MultiAZ": "true",
+        "DBInstanceClass": "db.m3.medium",
+        "DBInstanceIdentifier": {
+          "Ref": "AWS::StackName"
+        },
+        "DBSecurityGroups": [
+          {
+            "Ref": "DBSecurityGroup"
+          }
+        ],
+        "DBSubnetGroupName": {
+          "Ref": "DBSubnetGroup"
+        },
+        "AllocatedStorage": "100",
+        "DBName": "event_portal",
+        "Engine": "MySQL",
+        "MasterUsername": "master",
+        "MasterUserPassword": {
+          "Ref": "DBPassword"
+        },
+        "AutoMinorVersionUpgrade": "true",
+        "BackupRetentionPeriod": "35",
+        "PreferredBackupWindow": "07:00-07:30",
+        "PreferredMaintenanceWindow": "sun:05:50-sun:06:20",
+        "Tags": [
+          {
+            "Key": "Network",
+            "Value": "Private"
+          },
+          {
+            "Key": "workload-type",
+            "Value": "staging"
+          },
+          {
+            "Key": "Name",
+            "Value": "Event Portal RDSInstance"
+          },
+          {
+            "Key": "Name",
+            "Value": "EventPortal RDSInstance"
+          }
+        ]
+      }
+    }
+  },
+  "Outputs": {
+    "StackId": {
+      "Value": {
+        "Ref": "EventPortalStack"
+      }
+    },
+    "LoadBalancer": {
+      "Value": {
+        "Ref": "LoadBalancer"
+      }
+    },
+    "CloudFrontURL": {
+      "Value": {
+        "Fn::GetAtt": [
+          "CloudfrontDistribution",
+          "DomainName"
+        ]
+      }
+    },
+    "CloudWatchEndpoint": {
+      "Value": {
+        "Fn::Join": [
+          ".",
+          [
+            "monitoring",
+            {
+              "Ref": "AWS::Region"
+            },
+            "amazonaws.com"
+          ]
+        ]
+      }
+    }
+  }
+}
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Launches OpsWorks stack, layer, instances and associated resources to run a Event Portal application. The application runs inside an Amazon VPC with an LoadBalancer, 2 Public Subnets, 2 Private Subnets, multiple NAT/EC2 instances, REDIS cluster, and MuliAZ RDS DB.",
+  "Parameters": {
+    "Environment": {
+      "Description": "Specify the type of environment you'd like to create",
+      "Type": "String",
+      "MinLength": "2",
+      "MaxLength": "12",
+      "AllowedValues": [
+        "dev",
+        "qaa",
+        "qab",
+        "qac",
+        "reseller",
+        "stage3",
+        "prod"
+      ],
+      "Default": "dev",
+      "ConstraintDescription": "must be in the list [dev, qaa, qab, qac, stage3, prod]"
+    },
+    "Version": {
+      "Description": "Specify the type of version of the application you'd like to deploy",
+      "Type": "String",
+      "MinLength": "2",
+      "ConstraintDescription": "version number should follow semantic versioning format.. ie. 1.0.4-RC4"
+    },
+    "VpcId": {
+      "Type": "String",
+      "Description": "VPC ID where you wish to deploy these network resources. Format: vpc-xxxxxxxx",
+      "AllowedPattern": "^vpc-[0-9a-f]{8}$",
+      "ConstraintDescription": "must start with 'vpc-' followed by 8 hexadecimal characters in lowercase.",
+      "MinLength": "12",
+      "MaxLength": "12"
+    },
+    "InternetGatewayId": {
+      "Type": "String",
+      "Description": "Internet Gateway ID for the VPC where you are deploying this solution. Format: igw-xxxxxxxx",
+      "AllowedPattern": "^igw-[0-9a-f]{8}$",
+      "ConstraintDescription": "must start with 'igw-' followed by 8 hexadecimal characters in lowercase."
+    },
+    "VirtualPrivateGatewayId": {
+      "Type": "String",
+      "Description": "Virtual Private Gateway ID for the VPC where you are deploying this solution which allows you to reach back office resources. Format: vgw-xxxxxxxx",
+      "AllowedPattern": "^vgw-[0-9a-f]{8}$",
+      "MinLength": "12",
+      "MaxLength": "12",
+      "ConstraintDescription": "must start with 'vgw-' followed by 8 hexadecimal characters in lowercase."
+    },
+    "AZs": {
+      "Type": "CommaDelimitedList",
+      "Description": "In which 2 Availability Zones do you want to deploy this stack? Enter the AZs as a list of single lowercase characters, choosing from 'a', 'b', or 'c'.",
+      "ConstraintDescription": "must be an AvailabilityZone from a-c expressed as a comma delimited list of single lowercase letters."
+    },
+    "CidrBlock": {
+      "Type": "String",
+      "MinLength": "5",
+      "MaxLength": "11",
+      "Description": "First 3 octets of the /27 CIDR block for this solution.  Ex. If the solution is to be deployed into 10.83.7.0/27, then enter '10.83.7'",
+      "ConstraintDescription": "The first 3 octets of a CIDR prefix string (ex. 10.83.7)",
+      "AllowedPattern": "^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}$"
+    },
+    "NatInstanceIds": {
+      "Type": "CommaDelimitedList",
+      "Description": "Instance IDs of the 2 NAT nodes (one for each AZ) for the VPC where you are deploying.  This allows instances without an EIP to reach the Internet. Format: 'i-xxxxxxxx, i-yyyyyyyy' "
+    },
+    "SSLCertificateName": {
+      "Description": "Name of the SSL certificate for the public Load Balancer",
+      "Type": "String",
+      "MinLength": "8",
+      "MaxLength": "255"
+    },
+    "ELBCnameAlias": {
+      "Description": "DNS Alias mapped to the public Load Balancer DNS entry",
+      "Type": "String",
+      "MinLength": "8",
+      "MaxLength": "255"
+    },
+    "CDNSSLCertificateID": {
+      "Description": "ID of the SSL certificate for our CNAME'd Cloudfront domain.  NOTE: This certificate must also be in the IAM certificate store for the current AWS account.  You will need to upload it there if it is not.",
+      "Type": "String",
+      "MinLength": "8",
+      "MaxLength": "255"
+    },
+    "CDNCnameAlias": {
+      "Description": "DNS Alias mapped to the Cloudfront distribution DNS entry",
+      "Type": "String",
+      "MinLength": "8",
+      "MaxLength": "255"
+    },
+    "KeyName": {
+      "Description": "Name of an existing EC2 KeyPair to enable SSH access to the instances",
+      "Type": "AWS::EC2::KeyPair::KeyName",
+      "Default": "gsa"
+    },
+    "DBPassword": {
+      "NoEcho": "true",
+      "Description": "Admin password for MySQL database access",
+      "Type": "String",
+      "MinLength": "8",
+      "MaxLength": "41",
+      "ConstraintDescription": "must contain only ASCII characters."
+    },
+    "AssetBucket": {
+      "Type": "String",
+      "Description": "S3 bucket for application assets and uploads.",
+      "MinLength": "3",
+      "MaxLength": "255",
+      "AllowedPattern": "[\\x20-\\x7E]*",
+      "ConstraintDescription": "can contain only ASCII characters."
+    },
+    "MandrillApiKey": {
+      "Type": "String",
+      "Description": "Mandrill Api Key - Specific for each environment",
+      "MinLength": "5",
+      "MaxLength": "256",
+      "ConstraintDescription": "can contain only ASCII characters."
+    },
+    "MandrillApiUser": {
+      "Type": "String",
+      "Description": "Mandrill Api User - Specific for each environment",
+      "MinLength": "5",
+      "MaxLength": "24",
+      "ConstraintDescription": "can contain only ASCII characters."
+    },
+    "MandrillApiPwd": {
+      "Type": "String",
+      "Description": "Mandrill Api Password - Specific for each environment",
+      "MinLength": "5",
+      "MaxLength": "128",
+      "ConstraintDescription": "can contain only ASCII characters."
+    },
+    "PGiWebServicesPrefix": {
+      "Type": "String",
+      "Description": "PGi Web Services Prefix",
+      "MinLength": "12",
+      "MaxLength": "512",
+      "ConstraintDescription": "must be a valid Url"
+    },
+    "PGiWebServicesId": {
+      "Type": "String",
+      "Description": "PGi Web Services Id",
+      "MinLength": "6",
+      "MaxLength": "512",
+      "ConstraintDescription": "can contain number characters."
+    },
+    "PGiWebServicesPwd": {
+      "Type": "String",
+      "Description": "PGi Web Services Password",
+      "MinLength": "2",
+      "MaxLength": "512",
+      "ConstraintDescription": "can contain ASCII characters."
+    },
+    "PGiSecurityUrl": {
+      "Type": "String",
+      "Description": "PGi Web Services Security URL",
+      "MinLength": "2",
+      "MaxLength": "2048",
+      "ConstraintDescription": "can contain ASCII characters."
+    },
+    "PGiServicesUrl": {
+      "Type": "String",
+      "Description": "PGi Web Services  URL",
+      "MinLength": "2",
+      "MaxLength": "2048",
+      "ConstraintDescription": "can contain ASCII characters."
+    },
+    "PGiProfilesUrl": {
+      "Type": "String",
+      "Description": "PGi Web Services Profiles URL",
+      "MinLength": "2",
+      "MaxLength": "2048",
+      "ConstraintDescription": "can contain ASCII characters."
+    },
+    "PGiInMeetingUrl": {
+      "Type": "String",
+      "Description": "PGi Web Services In Meeting URL",
+      "MinLength": "2",
+      "MaxLength": "2048",
+      "ConstraintDescription": "can contain ASCII characters."
+    },
+    "PGiRefreshUrl": {
+      "Type": "String",
+      "Description": "PGi Web Services Refresh URL",
+      "MinLength": "2",
+      "MaxLength": "2048",
+      "ConstraintDescription": "can contain ASCII characters."
+    },
+    "PGiLegacyUrl": {
+      "Type": "String",
+      "Description": "Legacy Url",
+      "MinLength": "2",
+      "MaxLength": "4096",
+      "ConstraintDescription": "can contain ASCII characters."
+    },
+    "PGiAssistanceUrl": {
+      "Type": "String",
+      "Description": "Assistance Url.",
+      "MinLength": "2",
+      "MaxLength": "1024",
+      "ConstraintDescription": "can contain ASCII characters."
+    },
+    "SystemCheckUrl": {
+      "Type": "String",
+      "Description": "System Check Url.",
+      "MinLength": "2",
+      "MaxLength": "1024",
+      "ConstraintDescription": "can contain ASCII characters."
+    },
+    "GMDetectUrl": {
+      "Type": "String",
+      "Description": "GMDetect swf Url.",
+      "MinLength": "2",
+      "MaxLength": "1024",
+      "ConstraintDescription": "can contain ASCII characters."
+    },
+    "PGiClientGetSoapEnvelope": {
+      "Type": "String",
+      "Description": "SOAP Envelope for making http request posts to PGi WebServices.",
+      "MinLength": "2",
+      "MaxLength": "4096",
+      "ConstraintDescription": "can contain ASCII characters."
+    },
+    "ClientPwd": {
+      "Type": "String",
+      "Description": "PGi client password",
+      "MinLength": "2",
+      "MaxLength": "512",
+      "ConstraintDescription": "can contain ASCII characters."
+    },
+    "S3OriginId": {
+      "Type": "String",
+      "Description": "S3 Origin Id in this AWS account to use to restrict access to S3 asset bucket thru Cloudfront only",
+      "MinLength": "3",
+      "MaxLength": "255",
+      "AllowedPattern": "[\\x20-\\x7E]*",
+      "ConstraintDescription": "can contain only ASCII characters."
+    },
+    "OriginAccessIdentityCanonicalUser": {
+      "Type": "String",
+      "Description": "Canonical User Id of the Origin Access Id associated with the S3 asset bucket",
+      "MinLength": "3",
+      "MaxLength": "255",
+      "AllowedPattern": "[\\x20-\\x7E]*",
+      "ConstraintDescription": "can contain only ASCII characters."
+    },
+    "DigestEmailAddress": {
+      "Type": "String",
+      "Description": "Admin email address to send weekly digest email reports to",
+      "MinLength": "9",
+      "MaxLength": "255",
+      "AllowedPattern": "[\\x20-\\x7E]*",
+      "ConstraintDescription": "can contain only ASCII characters."
+    },
+    "OrganizerEmailAddress": {
+      "Type": "String",
+      "Description": "ICS organizer email address",
+      "MinLength": "9",
+      "MaxLength": "255",
+      "AllowedPattern": "[\\x20-\\x7E]*",
+      "ConstraintDescription": "can contain only ASCII characters."
+    },
+    "SumologicAccessID": {
+      "Description": "Sumologic AccessID to use for creating a collector",
+      "NoEcho": "true",
+      "Type": "String",
+      "MinLength": "1",
+      "MaxLength": "255",
+      "AllowedPattern": "[\\x20-\\x7E]*",
+      "ConstraintDescription": "can contain only ASCII characters."
+    },
+    "SumologicAccessKey": {
+      "Description": "Sumologic AccessKey to use for creating a collector",
+      "NoEcho": "true",
+      "Type": "String",
+      "MinLength": "1",
+      "MaxLength": "255",
+      "AllowedPattern": "[\\x20-\\x7E]*",
+      "ConstraintDescription": "can contain only ASCII characters."
+    },
+    "RepoBucket": {
+      "Type": "String",
+      "Description": "S3 Bucket containing the application deployment unit and cookbook",
+      "Default": "bob-repo",
+      "MinLength": "3",
+      "MaxLength": "255",
+      "AllowedPattern": "[\\x20-\\x7E]*",
+      "ConstraintDescription": "can contain only ASCII characters."
+    },
+    "DiagnosticsBucket": {
+      "Type": "String",
+      "Description": "S3 bucket name for diagnostics logs such as ELB access logs e.g. pgi-diagnostics-<accountname>] - may contain alphanumeric characters, periods, dashes and underscores",
+      "MinLength": "1",
+      "MaxLength": "255",
+      "AllowedPattern": "[\\x20-\\x7E]*",
+      "ConstraintDescription": "can contain only ASCII characters."
+    },
+    "LoggingPath": {
+      "Type": "String",
+      "Description": "Path to the access logging directory within the diagnostic logging bucket e.g. elb-access-logs/event-portal/prod (remember not to end this in a forward slash!)",
+      "MinLength": "12",
+      "MaxLength": "1024",
+      "AllowedPattern": "[\\x20-\\x7E]*",
+      "ConstraintDescription": "can contain only ASCII characters."
+    }
+  },
+  "Resources": {
+    "PublicRouteTable": {
+      "Type": "AWS::EC2::RouteTable",
+      "Properties": {
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "Tags": [
+          {
+            "Key": "Network",
+            "Value": "Public"
+          },
+          {
+            "Key": "Name",
+            "Value": "Event Portal Public Route Table"
+          },
+          {
+            "Key": "Name",
+            "Value": "EventPortal Public Route Table"
+          }
+        ]
+      }
+    },
+    "PublicRoute": {
+      "Type": "AWS::EC2::Route",
+      "Properties": {
+        "RouteTableId": {
+          "Ref": "PublicRouteTable"
+        },
+        "DestinationCidrBlock": "0.0.0.0/0",
+        "GatewayId": {
+          "Ref": "InternetGatewayId"
+        }
+      }
+    },
+    "SubnetPublic0": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "CidrBlock": {
+          "Fn::Join": [
+            "",
+            [
+              {
+                "Ref": "CidrBlock"
+              },
+              ".",
+              "0/27"
+            ]
+          ]
+        },
+        "AvailabilityZone": {
+          "Fn::Join": [
+            "",
+            [
+              {
+                "Ref": "AWS::Region"
+              },
+              {
+                "Fn::Select": [
+                  0,
+                  {
+                    "Ref": "AZs"
+                  }
+                ]
+              }
+            ]
+          ]
+        },
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "Tags": [
+          {
+            "Key": "Zone",
+            "Value": {
+              "Fn::Join": [
+                "",
+                [
+                  {
+                    "Ref": "AWS::Region"
+                  },
+                  {
+                    "Fn::Select": [
+                      0,
+                      {
+                        "Ref": "AZs"
+                      }
+                    ]
+                  }
+                ]
+              ]
+            }
+          },
+          {
+            "Key": "Network",
+            "Value": "Public"
+          },
+          {
+            "Key": "Name",
+            "Value": "Event Portal Subnet Public 0"
+          },
+          {
+            "Key": "Name",
+            "Value": "EventPortal Subnet Public 0"
+          }
+        ]
+      }
+    },
+    "PublicSubnetRouteTableAssociation0": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties": {
+        "SubnetId": {
+          "Ref": "SubnetPublic0"
+        },
+        "RouteTableId": {
+          "Ref": "PublicRouteTable"
+        }
+      }
+    },
+    "SubnetPublic1": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "CidrBlock": {
+          "Fn::Join": [
+            "",
+            [
+              {
+                "Ref": "CidrBlock"
+              },
+              ".",
+              "32/27"
+            ]
+          ]
+        },
+        "AvailabilityZone": {
+          "Fn::Join": [
+            "",
+            [
+              {
+                "Ref": "AWS::Region"
+              },
+              {
+                "Fn::Select": [
+                  1,
+                  {
+                    "Ref": "AZs"
+                  }
+                ]
+              }
+            ]
+          ]
+        },
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "Tags": [
+          {
+            "Key": "Zone",
+            "Value": {
+              "Fn::Join": [
+                "",
+                [
+                  {
+                    "Ref": "AWS::Region"
+                  },
+                  {
+                    "Fn::Select": [
+                      1,
+                      {
+                        "Ref": "AZs"
+                      }
+                    ]
+                  }
+                ]
+              ]
+            }
+          },
+          {
+            "Key": "Network",
+            "Value": "Public"
+          },
+          {
+            "Key": "Name",
+            "Value": "Event Portal Subnet Public 1"
+          },
+          {
+            "Key": "Name",
+            "Value": "EventPortal Subnet Public 1"
+          }
+        ]
+      }
+    },
+    "PublicSubnetRouteTableAssociation1": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties": {
+        "SubnetId": {
+          "Ref": "SubnetPublic1"
+        },
+        "RouteTableId": {
+          "Ref": "PublicRouteTable"
+        }
+      }
+    },
+    "SubnetPrivate0": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "CidrBlock": {
+          "Fn::Join": [
+            "",
+            [
+              {
+                "Ref": "CidrBlock"
+              },
+              ".",
+              "64/27"
+            ]
+          ]
+        },
+        "AvailabilityZone": {
+          "Fn::Join": [
+            "",
+            [
+              {
+                "Ref": "AWS::Region"
+              },
+              {
+                "Fn::Select": [
+                  0,
+                  {
+                    "Ref": "AZs"
+                  }
+                ]
+              }
+            ]
+          ]
+        },
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "Tags": [
+          {
+            "Key": "Zone",
+            "Value": {
+              "Fn::Join": [
+                "",
+                [
+                  {
+                    "Ref": "AWS::Region"
+                  },
+                  {
+                    "Fn::Select": [
+                      0,
+                      {
+                        "Ref": "AZs"
+                      }
+                    ]
+                  }
+                ]
+              ]
+            }
+          },
+          {
+            "Key": "Network",
+            "Value": "Private"
+          },
+          {
+            "Key": "Name",
+            "Value": "Event Portal Subnet Private 0"
+          },
+          {
+            "Key": "Name",
+            "Value": "EventPortal Subnet Private 0"
+          }
+        ]
+      }
+    },
+    "PrivateRouteTable0": {
+      "Type": "AWS::EC2::RouteTable",
+      "Properties": {
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "Tags": [
+          {
+            "Key": "Network",
+            "Value": "Private"
+          },
+          {
+            "Key": "Name",
+            "Value": "Event Portal Private Route Table 0"
+          },
+          {
+            "Key": "Name",
+            "Value": "EventPortal Private Route Table 0"
+          }
+        ]
+      }
+    },
+    "PrivateSubnetRouteTableAssociation0": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties": {
+        "SubnetId": {
+          "Ref": "SubnetPrivate0"
+        },
+        "RouteTableId": {
+          "Ref": "PrivateRouteTable0"
+        }
+      }
+    },
+    "PrivateRoute0": {
+      "Type": "AWS::EC2::Route",
+      "DependsOn": "PrivateRouteTable0",
+      "Properties": {
+        "RouteTableId": {
+          "Ref": "PrivateRouteTable0"
+        },
+        "DestinationCidrBlock": "0.0.0.0/0",
+        "InstanceId": {
+          "Fn::Select": [
+            0,
+            {
+              "Ref": "NatInstanceIds"
+            }
+          ]
+        }
+      }
+    },
+    "PrivateRouteToPGI0": {
+      "Type": "AWS::EC2::Route",
+      "DependsOn": "PrivateRouteTable0",
+      "Properties": {
+        "RouteTableId": {
+          "Ref": "PrivateRouteTable0"
+        },
+        "DestinationCidrBlock": "10.0.0.0/8",
+        "GatewayId": {
+          "Ref": "VirtualPrivateGatewayId"
+        }
+      }
+    },
+    "Instance0": {
+      "Type": "AWS::OpsWorks::Instance",
+      "DependsOn": "EventPortalServiceLayer",
+      "Properties": {
+        "StackId": {
+          "Ref": "EventPortalStack"
+        },
+        "LayerIds": [
+          {
+            "Ref": "EventPortalServiceLayer"
+          }
+        ],
+        "InstanceType": "m3.medium",
+        "InstallUpdatesOnBoot": true,
+        "SubnetId": {
+          "Ref": "SubnetPrivate0"
+        }
+      }
+    },
+    "SubnetPrivate1": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "CidrBlock": {
+          "Fn::Join": [
+            "",
+            [
+              {
+                "Ref": "CidrBlock"
+              },
+              ".",
+              "96/27"
+            ]
+          ]
+        },
+        "AvailabilityZone": {
+          "Fn::Join": [
+            "",
+            [
+              {
+                "Ref": "AWS::Region"
+              },
+              {
+                "Fn::Select": [
+                  1,
+                  {
+                    "Ref": "AZs"
+                  }
+                ]
+              }
+            ]
+          ]
+        },
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "Tags": [
+          {
+            "Key": "Zone",
+            "Value": {
+              "Fn::Join": [
+                "",
+                [
+                  {
+                    "Ref": "AWS::Region"
+                  },
+                  {
+                    "Fn::Select": [
+                      1,
+                      {
+                        "Ref": "AZs"
+                      }
+                    ]
+                  }
+                ]
+              ]
+            }
+          },
+          {
+            "Key": "Network",
+            "Value": "Private"
+          },
+          {
+            "Key": "Name",
+            "Value": "Event Portal Subnet Private 1"
+          },
+          {
+            "Key": "Name",
+            "Value": "EventPortal Subnet Private 1"
+          }
+        ]
+      }
+    },
+    "PrivateRouteTable1": {
+      "Type": "AWS::EC2::RouteTable",
+      "Properties": {
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "Tags": [
+          {
+            "Key": "Network",
+            "Value": "Private"
+          },
+          {
+            "Key": "Name",
+            "Value": "Event Portal Private Route Table 1"
+          },
+          {
+            "Key": "Name",
+            "Value": "EventPortal Private Route Table 1"
+          }
+        ]
+      }
+    },
+    "PrivateSubnetRouteTableAssociation1": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties": {
+        "SubnetId": {
+          "Ref": "SubnetPrivate1"
+        },
+        "RouteTableId": {
+          "Ref": "PrivateRouteTable1"
+        }
+      }
+    },
+    "PrivateRoute1": {
+      "Type": "AWS::EC2::Route",
+      "DependsOn": "PrivateRouteTable1",
+      "Properties": {
+        "RouteTableId": {
+          "Ref": "PrivateRouteTable1"
+        },
+        "DestinationCidrBlock": "0.0.0.0/0",
+        "InstanceId": {
+          "Fn::Select": [
+            1,
+            {
+              "Ref": "NatInstanceIds"
+            }
+          ]
+        }
+      }
+    },
+    "PrivateRouteToPGI1": {
+      "Type": "AWS::EC2::Route",
+      "DependsOn": "PrivateRouteTable1",
+      "Properties": {
+        "RouteTableId": {
+          "Ref": "PrivateRouteTable1"
+        },
+        "DestinationCidrBlock": "10.0.0.0/8",
+        "GatewayId": {
+          "Ref": "VirtualPrivateGatewayId"
+        }
+      }
+    },
+    "Instance1": {
+      "Type": "AWS::OpsWorks::Instance",
+      "DependsOn": [
+        "Instance0",
+        "EventPortalServiceLayer"
+      ],
+      "Properties": {
+        "StackId": {
+          "Ref": "EventPortalStack"
+        },
+        "LayerIds": [
+          {
+            "Ref": "EventPortalServiceLayer"
+          }
+        ],
+        "InstanceType": "m3.medium",
+        "InstallUpdatesOnBoot": true,
+        "SubnetId": {
+          "Ref": "SubnetPrivate1"
+        }
+      }
+    },
+    "LoadBalancer": {
+      "Type": "AWS::ElasticLoadBalancing::LoadBalancer",
+      "Properties": {
+        "Subnets": [
+          {
+            "Ref": "SubnetPublic0"
+          },
+          {
+            "Ref": "SubnetPublic1"
+          }
+        ],
+        "HealthCheck": {
+          "Target": "HTTP:8080/ui/health.html",
+          "Interval": "30",
+          "Timeout": "5",
+          "UnhealthyThreshold": "2",
+          "HealthyThreshold": "10"
+        },
+        "SecurityGroups": [
+          {
+            "Ref": "LoadBalancerSecurityGroup"
+          }
+        ],
+        "Listeners": [
+          {
+            "InstancePort": "8080",
+            "LoadBalancerPort": "443",
+            "Protocol": "HTTPS",
+            "InstanceProtocol": "HTTP",
+            "SSLCertificateId": {
+              "Fn::Join": [
+                "",
+                [
+                  "arn:aws:iam::",
+                  {
+                    "Ref": "AWS::AccountId"
+                  },
+                  ":server-certificate/",
+                  {
+                    "Ref": "SSLCertificateName"
+                  }
+                ]
+              ]
+            }
+          }
+        ],
+        "AccessLoggingPolicy": {
+          "EmitInterval": "5",
+          "Enabled": true,
+          "S3BucketName": {
+            "Ref": "DiagnosticsBucket"
+          },
+          "S3BucketPrefix": {
+            "Ref": "LoggingPath"
+          }
+        }
+      }
+    },
+    "LoadBalancerAttachment": {
+      "Type": "AWS::OpsWorks::ElasticLoadBalancerAttachment",
+      "Properties": {
+        "ElasticLoadBalancerName": {
+          "Ref": "LoadBalancer"
+        },
+        "LayerId": {
+          "Ref": "EventPortalServiceLayer"
+        }
+      }
+    },
+    "EventPortalUser": {
+      "Type": "AWS::IAM::User"
+    },
+    "EventPortalUserKey": {
+      "Type": "AWS::IAM::AccessKey",
+      "Properties": {
+        "UserName": {
+          "Ref": "EventPortalUser"
+        }
+      }
+    },
+    "EventPortalGroup": {
+      "Type": "AWS::IAM::Group",
+      "Properties": {
+        "Policies": [
+          {
+            "PolicyName": "EventPortalS3GroupPolicy",
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Action": [
+                    "s3:GetBucketLocation",
+                    "s3:ListAllMyBuckets"
+                  ],
+                  "Effect": "Allow",
+                  "Resource": [
+                    "arn:aws:s3:::*"
+                  ]
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:List*",
+                    "s3:Get*"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::Join": [
+                        "",
+                        [
+                          "arn:aws:s3:::",
+                          {
+                            "Ref": "RepoBucket"
+                          },
+                          "/globalmeet-seminar/*"
+                        ]
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "AddUserToEventPortalGroup": {
+      "Type": "AWS::IAM::UserToGroupAddition",
+      "Properties": {
+        "GroupName": {
+          "Ref": "EventPortalGroup"
+        },
+        "Users": [
+          {
+            "Ref": "EventPortalUser"
+          }
+        ]
+      }
+    },
+    "EventPortalStack": {
+      "Type": "AWS::OpsWorks::Stack",
+      "Properties": {
+        "Name": {
+          "Ref": "AWS::StackName"
+        },
+        "ServiceRoleArn": {
+          "Fn::GetAtt": [
+            "OpsWorksServiceRole",
+            "Arn"
+          ]
+        },
+        "DefaultInstanceProfileArn": {
+          "Fn::GetAtt": [
+            "OpsWorksInstanceProfile",
+            "Arn"
+          ]
+        },
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "DefaultSubnetId": {
+          "Ref": "SubnetPrivate1"
+        },
+        "DefaultSshKeyName": {
+          "Ref": "KeyName"
+        },
+        "ConfigurationManager": {
+          "Name": "Chef",
+          "Version": "11.10"
+        },
+        "UseCustomCookbooks": "true",
+        "CustomCookbooksSource": {
+          "Type": "s3",
+          "Url": {
+            "Fn::Join": [
+              "",
+              [
+                "https://",
+                {
+                  "Ref": "RepoBucket"
+                },
+                ".s3.amazonaws.com/globalmeet-seminar/cookbook-",
+                {
+                  "Ref": "Version"
+                },
+                ".tar.gz"
+              ]
+            ]
+          },
+          "Username": {
+            "Ref": "EventPortalUserKey"
+          },
+          "Password": {
+            "Fn::GetAtt": [
+              "EventPortalUserKey",
+              "SecretAccessKey"
+            ]
+          }
+        },
+        "CustomJson": {
+          "event_portal": {
+            "environment": {
+              "Ref": "Environment"
+            },
+            "version": {
+              "Ref": "Version"
+            },
+            "asset_bucket": {
+              "Ref": "AssetBucket"
+            },
+            "repo_bucket": {
+              "Ref": "RepoBucket"
+            },
+            "host": {
+              "Ref": "ELBCnameAlias"
+            },
+            "cloudfront_url": {
+              "Fn::Join": [
+                "",
+                [
+                  "https://",
+                  {
+                    "Ref": "CDNCnameAlias"
+                  }
+                ]
+              ]
+            },
+            "digest_email_address": {
+              "Ref": "DigestEmailAddress"
+            },
+            "organizer_email_address": {
+              "Ref": "OrganizerEmailAddress"
+            }
+          },
+          "database": {
+            "host": {
+              "Fn::GetAtt": [
+                "RDSInstance",
+                "Endpoint.Address"
+              ]
+            },
+            "port": {
+              "Fn::GetAtt": [
+                "RDSInstance",
+                "Endpoint.Port"
+              ]
+            },
+            "name": "event_portal",
+            "username": "master",
+            "password": {
+              "Ref": "DBPassword"
+            },
+            "reconnect": true
+          },
+          "redis": {
+            "cluster_id": {
+              "Ref": "AWS::StackName"
+            }
+          },
+          "pgi": {
+            "web_services_prefix": {
+              "Ref": "PGiWebServicesPrefix"
+            },
+            "web_services_id": {
+              "Ref": "PGiWebServicesId"
+            },
+            "web_services_password": {
+              "Ref": "PGiWebServicesPwd"
+            },
+            "security_url": {
+              "Ref": "PGiSecurityUrl"
+            },
+            "services_url": {
+              "Ref": "PGiServicesUrl"
+            },
+            "profile_url": {
+              "Ref": "PGiProfilesUrl"
+            },
+            "in_meeting_url": {
+              "Ref": "PGiInMeetingUrl"
+            },
+            "refresh_url": {
+              "Ref": "PGiRefreshUrl"
+            },
+            "legacy_base_url": {
+              "Ref": "PGiLegacyUrl"
+            },
+            "web_assistance_url": {
+              "Ref": "PGiAssistanceUrl"
+            },
+            "system_check_url": {
+              "Ref": "SystemCheckUrl"
+            },
+            "gmdetect_url": {
+              "Ref": "GMDetectUrl"
+            },
+            "client_password": {
+              "Ref": "ClientPwd"
+            },
+            "clientget_soapenvelope": {
+              "Ref": "PGiClientGetSoapEnvelope"
+            }
+          },
+          "mandrill": {
+            "user": {
+              "Ref": "MandrillApiUser"
+            },
+            "pass": {
+              "Ref": "MandrillApiPwd"
+            },
+            "api_key": {
+              "Ref": "MandrillApiKey"
+            }
+          },
+          "opsworks": {
+            "data_bags": {
+              "sumo-creds": {
+                "api-creds": {
+                  "accessID": {
+                    "Ref": "SumologicAccessID"
+                  },
+                  "accessKey": {
+                    "Ref": "SumologicAccessKey"
+                  }
+                }
+              }
+            },
+            "ruby_version": "2.0.0"
+          },
+          "ruby": {
+            "patch_version": "p647"
+          }
+        }
+      }
+    },
+    "EventPortalServiceLayer": {
+      "Type": "AWS::OpsWorks::Layer",
+      "Metadata": {
+        "Comment": "OpsWorks instances require outbound Internet access. Using DependsOn to make sure outbound Internet Access is estlablished before creating instances in this layer."
+      },
+      "DependsOn": [
+        "PublicRoute",
+        "SubnetPublic0",
+        "SubnetPublic1",
+        "SubnetPrivate0",
+        "SubnetPrivate1"
+      ],
+      "Properties": {
+        "StackId": {
+          "Ref": "EventPortalStack"
+        },
+        "Name": {
+          "Ref": "AWS::StackName"
+        },
+        "Type": "custom",
+        "Shortname": "event_portal",
+        "EnableAutoHealing": "true",
+        "AutoAssignElasticIps": "false",
+        "AutoAssignPublicIps": "false",
+        "CustomSecurityGroupIds": [
+          {
+            "Ref": "WebServerSecurityGroup"
+          }
+        ],
+        "CustomRecipes": {
+          "Setup": [
+            "event_portal::default"
+          ]
+        }
+      }
+    },
+    "OpsWorksServiceRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": [
+                  "opsworks.amazonaws.com"
+                ]
+              },
+              "Action": [
+                "sts:AssumeRole"
+              ]
+            }
+          ]
+        },
+        "Path": "/",
+        "Policies": [
+          {
+            "PolicyName": "opsworks-service",
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "ec2:*",
+                    "s3:*",
+                    "iam:PassRole",
+                    "cloudwatch:GetMetricStatistics",
+                    "elasticloadbalancing:*"
+                  ],
+                  "Resource": "*"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "OpsWorksInstanceRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": [
+                  "ec2.amazonaws.com"
+                ]
+              },
+              "Action": [
+                "sts:AssumeRole"
+              ]
+            }
+          ]
+        },
+        "Path": "/",
+        "Policies": [
+          {
+            "PolicyName": "opsworks-instance",
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "elasticache:*",
+                    "s3:*",
+                    "ec2:*",
+                    "elasticloadbalancing:*",
+                    "iam:PassRole",
+                    "cloudwatch:PutMetricData",
+                    "cloudwatch:GetMetricStatistics",
+                    "cloudwatch:ListMetrics",
+                    "ec2:DescribeTags"
+                  ],
+                  "Resource": "*"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "OpsWorksInstanceProfile": {
+      "Type": "AWS::IAM::InstanceProfile",
+      "Properties": {
+        "Path": "/",
+        "Roles": [
+          {
+            "Ref": "OpsWorksInstanceRole"
+          }
+        ]
+      }
+    },
+    "LoadBalancerSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Enable only SSL traffic from internet on port 443",
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": "443",
+            "ToPort": "443",
+            "CidrIp": "0.0.0.0/0"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Network",
+            "Value": "Public"
+          },
+          {
+            "Key": "Name",
+            "Value": "Event Portal Load Balancer Security Group"
+          },
+          {
+            "Key": "Name",
+            "Value": "EventPortal Load Balancer Security Group"
+          }
+        ]
+      }
+    },
+    "WebServerSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Allow inbound requests from the LoadBalancer to the OpsWorks instances",
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": "8080",
+            "ToPort": "8080",
+            "SourceSecurityGroupId": {
+              "Ref": "LoadBalancerSecurityGroup"
+            }
+          }
+        ],
+        "SecurityGroupEgress": [
+          {
+            "IpProtocol": "-1",
+            "CidrIp": "0.0.0.0/0"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Network",
+            "Value": "Private"
+          },
+          {
+            "Key": "Name",
+            "Value": "Event Portal Web Server Security Group"
+          },
+          {
+            "Key": "Name",
+            "Value": "EventPortal Web Server Security Group"
+          }
+        ]
+      }
+    },
+    "NATSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Enable internal access to the NAT device",
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "-1",
+            "SourceSecurityGroupId": {
+              "Ref": "WebServerSecurityGroup"
+            }
+          }
+        ],
+        "SecurityGroupEgress": [
+          {
+            "IpProtocol": "-1",
+            "CidrIp": "0.0.0.0/0"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Network",
+            "Value": "Private"
+          },
+          {
+            "Key": "Name",
+            "Value": "Event Portal NATSecurity Group"
+          },
+          {
+            "Key": "Name",
+            "Value": "EventPortal NATSecurity Group"
+          }
+        ]
+      }
+    },
+    "ElasticCacheSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Lock down access to cache only to webserver instances",
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": "6379",
+            "ToPort": "6379",
+            "SourceSecurityGroupId": {
+              "Ref": "WebServerSecurityGroup"
+            }
+          }
+        ],
+        "SecurityGroupEgress": [
+          {
+            "IpProtocol": "-1",
+            "CidrIp": "0.0.0.0/0"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Network",
+            "Value": "Private"
+          },
+          {
+            "Key": "Name",
+            "Value": "Event Portal Elastic Cache Security Group"
+          },
+          {
+            "Key": "Name",
+            "Value": "EventPortal Elastic Cache Security Group"
+          }
+        ]
+      }
+    },
+    "DBSecurityGroup": {
+      "Type": "AWS::RDS::DBSecurityGroup",
+      "Properties": {
+        "GroupDescription": "DB access from webservers",
+        "EC2VpcId": {
+          "Ref": "VpcId"
+        },
+        "DBSecurityGroupIngress": [
+          {
+            "EC2SecurityGroupId": {
+              "Fn::GetAtt": [
+                "WebServerSecurityGroup",
+                "GroupId"
+              ]
+            }
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Network",
+            "Value": "Private"
+          },
+          {
+            "Key": "Name",
+            "Value": "Event Portal DBSecurity Group"
+          },
+          {
+            "Key": "Name",
+            "Value": "EventPortal DBSecurity Group"
+          }
+        ]
+      }
+    },
+    "S3Bucket": {
+      "Type": "AWS::S3::Bucket",
+      "Properties": {
+        "BucketName": {
+          "Ref": "AssetBucket"
+        },
+        "AccessControl": "PublicRead",
+        "Tags": [
+          {
+            "Key": "Network",
+            "Value": "Public"
+          },
+          {
+            "Key": "Name",
+            "Value": "EventPortal S3 Bucket"
+          }
+        ],
+        "CorsConfiguration": {
+          "CorsRules": [
+            {
+              "AllowedHeaders": [
+                "Authorization"
+              ],
+              "AllowedOrigins": [
+                "*"
+              ],
+              "AllowedMethods": [
+                "GET"
+              ],
+              "MaxAge": "3000"
+            }
+          ]
+        }
+      }
+    },
+    "AssetBucketPolicy": {
+      "Type": "AWS::S3::BucketPolicy",
+      "DependsOn": "S3Bucket",
+      "Properties": {
+        "PolicyDocument": {
+          "Id": "EventPortalAssetBucketPolicy",
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "ReadAccess",
+              "Action": [
+                "s3:GetObject"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    "arn:aws:s3:::",
+                    {
+                      "Ref": "AssetBucket"
+                    },
+                    "/*"
+                  ]
+                ]
+              },
+              "Principal": {
+                "CanonicalUser": {
+                  "Ref": "OriginAccessIdentityCanonicalUser"
+                }
+              }
+            }
+          ]
+        },
+        "Bucket": {
+          "Ref": "AssetBucket"
+        }
+      }
+    },
+    "CloudfrontDistribution": {
+      "Type": "AWS::CloudFront::Distribution",
+      "DependsOn": "S3Bucket",
+      "Properties": {
+        "DistributionConfig": {
+          "Comment": "Event Portal static assets",
+          "Enabled": "true",
+          "Aliases": [
+            {
+              "Ref": "CDNCnameAlias"
+            }
+          ],
+          "Origins": [
+            {
+              "DomainName": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Ref": "AssetBucket"
+                    },
+                    ".s3.amazonaws.com"
+                  ]
+                ]
+              },
+              "Id": "EventPortalS3Origin",
+              "S3OriginConfig": {
+                "OriginAccessIdentity": {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "origin-access-identity/cloudfront/",
+                      {
+                        "Ref": "S3OriginId"
+                      }
+                    ]
+                  ]
+                }
+              }
+            }
+          ],
+          "ViewerCertificate": {
+            "IamCertificateId": {
+              "Ref": "CDNSSLCertificateID"
+            },
+            "SslSupportMethod": "sni-only"
+          },
+          "DefaultRootObject": "index.html",
+          "Logging": {
+            "Bucket": {
+              "Fn::Join": [
+                "",
+                [
+                  "pgi-logs-",
+                  {
+                    "Ref": "AWS::Region"
+                  },
+                  "-development.s3.amazonaws.com"
+                ]
+              ]
+            },
+            "Prefix": "event-portal"
+          },
+          "DefaultCacheBehavior": {
+            "TargetOriginId": "EventPortalS3Origin",
+            "ForwardedValues": {
+              "QueryString": "true"
+            },
+            "ViewerProtocolPolicy": "redirect-to-https"
+          }
+        }
+      }
+    },
+    "ElasticCacheSubnetGroup": {
+      "Type": "AWS::ElastiCache::SubnetGroup",
+      "Properties": {
+        "Description": "Event Portal Private access to cache from instances",
+        "SubnetIds": [
+          {
+            "Ref": "SubnetPrivate0"
+          },
+          {
+            "Ref": "SubnetPrivate1"
+          }
+        ]
+      }
+    },
+    "ElasticCacheCluster": {
+      "Type": "AWS::ElastiCache::CacheCluster",
+      "Properties": {
+        "ClusterName": {
+          "Ref": "AWS::StackName"
+        },
+        "CacheNodeType": "cache.m3.medium",
+        "Engine": "redis",
+        "EngineVersion": "2.8.6",
+        "NumCacheNodes": "1",
+        "CacheSubnetGroupName": {
+          "Ref": "ElasticCacheSubnetGroup"
+        },
+        "VpcSecurityGroupIds": [
+          {
+            "Fn::GetAtt": [
+              "ElasticCacheSecurityGroup",
+              "GroupId"
+            ]
+          }
+        ],
+        "PreferredAvailabilityZone": {
+          "Fn::Join": [
+            "",
+            [
+              {
+                "Ref": "AWS::Region"
+              },
+              {
+                "Fn::Select": [
+                  0,
+                  {
+                    "Ref": "AZs"
+                  }
+                ]
+              }
+            ]
+          ]
+        },
+        "PreferredMaintenanceWindow": "wed:03:00-wed:04:00",
+        "AutoMinorVersionUpgrade": "true"
+      }
+    },
+    "DBSubnetGroup": {
+      "Type": "AWS::RDS::DBSubnetGroup",
+      "Properties": {
+        "DBSubnetGroupDescription": "Event Portal Private access to DB from instances",
+        "SubnetIds": [
+          {
+            "Ref": "SubnetPrivate0"
+          },
+          {
+            "Ref": "SubnetPrivate1"
+          }
+        ]
+      }
+    },
+    "RDSInstance": {
+      "Type": "AWS::RDS::DBInstance",
+      "Properties": {
+        "MultiAZ": "true",
+        "DBInstanceClass": "db.m3.medium",
+        "DBInstanceIdentifier": {
+          "Ref": "AWS::StackName"
+        },
+        "DBSecurityGroups": [
+          {
+            "Ref": "DBSecurityGroup"
+          }
+        ],
+        "DBSubnetGroupName": {
+          "Ref": "DBSubnetGroup"
+        },
+        "AllocatedStorage": "100",
+        "DBName": "event_portal",
+        "Engine": "MySQL",
+        "MasterUsername": "master",
+        "MasterUserPassword": {
+          "Ref": "DBPassword"
+        },
+        "AutoMinorVersionUpgrade": "true",
+        "BackupRetentionPeriod": "35",
+        "PreferredBackupWindow": "07:00-07:30",
+        "PreferredMaintenanceWindow": "sun:05:50-sun:06:20",
+        "Tags": [
+          {
+            "Key": "Network",
+            "Value": "Private"
+          },
+          {
+            "Key": "workload-type",
+            "Value": "staging"
+          },
+          {
+            "Key": "Name",
+            "Value": "Event Portal RDSInstance"
+          },
+          {
+            "Key": "Name",
+            "Value": "EventPortal RDSInstance"
+          }
+        ]
+      }
+    },
+    "SqsDeliveredQueue": {
+      "Type": "AWS::SQS::Queue",
+      "Properties": {
+        "DelaySeconds": 0,
+        "MessageRetentionPeriod": 1209600,
+        "QueueName": {
+          "Fn::Join": [
+            "",
+            [
+              null,
+              "-",
+              {
+                "Ref": "Environment"
+              },
+              "-DeliveredQueue"
+            ]
+          ]
+        },
+        "ReceiveMessageWaitTimeSeconds": 5,
+        "VisibilityTimeout": 1200
+      }
+    },
+    "SqsBounceQueue": {
+      "Type": "AWS::SQS::Queue",
+      "DependsOn": [
+        "SqsDeliveredQueue"
+      ],
+      "Properties": {
+        "DelaySeconds": 0,
+        "MessageRetentionPeriod": 1209600,
+        "QueueName": {
+          "Fn::Join": [
+            "",
+            [
+              null,
+              "-",
+              {
+                "Ref": "Environment"
+              },
+              "-BounceQueue"
+            ]
+          ]
+        },
+        "ReceiveMessageWaitTimeSeconds": 5,
+        "RedrivePolicy": {
+          "deadLetterTargetArn": {
+            "Fn::GetAtt": [
+              "SqsDeliveredQueue",
+              "Arn"
+            ]
+          },
+          "maxReceiveCount": "5"
+        },
+        "VisibilityTimeout": 1200
+      }
+    },
+    "SqsComplaintQueue": {
+      "Type": "AWS::SQS::Queue",
+      "DependsOn": [
+        "SqsDeliveredQueue"
+      ],
+      "Properties": {
+        "DelaySeconds": 0,
+        "MessageRetentionPeriod": 1209600,
+        "QueueName": {
+          "Fn::Join": [
+            "",
+            [
+              null,
+              "-",
+              {
+                "Ref": "Environment"
+              },
+              "-ComplaintQueue"
+            ]
+          ]
+        },
+        "ReceiveMessageWaitTimeSeconds": 5,
+        "RedrivePolicy": {
+          "deadLetterTargetArn": {
+            "Fn::GetAtt": [
+              "SqsDeliveredQueue",
+              "Arn"
+            ]
+          },
+          "maxReceiveCount": "5"
+        },
+        "VisibilityTimeout": 1200
+      }
+    },
+    "SnsDeliveredTopic": {
+      "Type": "AWS::SNS::Topic",
+      "DependsOn": [
+        "SqsDeliveredQueue"
+      ],
+      "Properties": {
+        "Subscription": [
+          {
+            "Endpoint": {
+              "Fn::GetAtt": [
+                "SqsDeliveredQueue",
+                "Arn"
+              ]
+            },
+            "Protocol": "sqs"
+          }
+        ],
+        "DisplayName": {
+          "Fn::Join": [
+            "",
+            [
+              null,
+              "-",
+              {
+                "Ref": "Environment"
+              },
+              "-Delivered"
+            ]
+          ]
+        },
+        "TopicName": {
+          "Fn::Join": [
+            "",
+            [
+              null,
+              "-",
+              {
+                "Ref": "Environment"
+              },
+              "-Delivered"
+            ]
+          ]
+        }
+      }
+    },
+    "SnsBounceTopic": {
+      "Type": "AWS::SNS::Topic",
+      "DependsOn": [
+        "SqsBounceQueue"
+      ],
+      "Properties": {
+        "Subscription": [
+          {
+            "Endpoint": {
+              "Fn::GetAtt": [
+                "SqsBounceQueue",
+                "Arn"
+              ]
+            },
+            "Protocol": "sqs"
+          }
+        ],
+        "DisplayName": {
+          "Fn::Join": [
+            "",
+            [
+              null,
+              "-",
+              {
+                "Ref": "Environment"
+              },
+              "}-Bounce"
+            ]
+          ]
+        },
+        "TopicName": {
+          "Fn::Join": [
+            "",
+            [
+              null,
+              "-",
+              {
+                "Ref": "Environment"
+              },
+              "-Bounce"
+            ]
+          ]
+        }
+      }
+    },
+    "SnsComplaintTopic": {
+      "Type": "AWS::SNS::Topic",
+      "DependsOn": [
+        "SqsComplaintQueue"
+      ],
+      "Properties": {
+        "Subscription": [
+          {
+            "Endpoint": {
+              "Fn::GetAtt": [
+                "SqsComplaintQueue",
+                "Arn"
+              ]
+            },
+            "Protocol": "sqs"
+          }
+        ],
+        "DisplayName": {
+          "Fn::Join": [
+            "",
+            [
+              null,
+              "-",
+              {
+                "Ref": "Environment"
+              },
+              "-Complaint"
+            ]
+          ]
+        },
+        "TopicName": {
+          "Fn::Join": [
+            "",
+            [
+              null,
+              "-",
+              {
+                "Ref": "Environment"
+              },
+              "-Complaint"
+            ]
+          ]
+        }
+      }
+    },
+    "SqsDeliveredQueuePolicy": {
+      "Type": "AWS::SQS::QueuePolicy",
+      "DependsOn": [
+        "SqsDeliveredQueue",
+        "SnsDeliveredTopic"
+      ],
+      "Properties": {
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "sqs-sns-access",
+              "Effect": "Allow",
+              "Principal": "*",
+              "Action": [
+                "sqs:SendMessage"
+              ],
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "SqsDeliveredQueue",
+                    "Arn"
+                  ]
+                }
+              ],
+              "Condition": {
+                "ArnEquals": {
+                  "aws:SourceArn": {
+                    "Ref": "SnsDeliveredTopic"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "Queues": [
+          {
+            "Ref": "SqsDeliveredQueue"
+          }
+        ]
+      }
+    },
+    "SqsBounceQueuePolicy": {
+      "Type": "AWS::SQS::QueuePolicy",
+      "DependsOn": [
+        "SqsBounceQueue",
+        "SnsBounceTopic"
+      ],
+      "Properties": {
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "sqs-sns-access",
+              "Effect": "Allow",
+              "Principal": "*",
+              "Action": [
+                "sqs:SendMessage"
+              ],
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "SqsBounceQueue",
+                    "Arn"
+                  ]
+                }
+              ],
+              "Condition": {
+                "ArnEquals": {
+                  "aws:SourceArn": {
+                    "Ref": "SnsBounceTopic"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "Queues": [
+          {
+            "Ref": "SqsBounceQueue"
+          }
+        ]
+      }
+    },
+    "SqsComplaintQueuePolicy": {
+      "Type": "AWS::SQS::QueuePolicy",
+      "DependsOn": [
+        "SqsComplaintQueue",
+        "SnsComplaintTopic"
+      ],
+      "Properties": {
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "sqs-sns-access",
+              "Effect": "Allow",
+              "Principal": "*",
+              "Action": [
+                "sqs:SendMessage"
+              ],
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "SqsComplaintQueue",
+                    "Arn"
+                  ]
+                }
+              ],
+              "Condition": {
+                "ArnEquals": {
+                  "aws:SourceArn": {
+                    "Ref": "SnsComplaintTopic"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "Queues": [
+          {
+            "Ref": "SqsComplaintQueue"
+          }
+        ]
+      }
+    }
+  },
+  "Outputs": {
+    "StackId": {
+      "Value": {
+        "Ref": "EventPortalStack"
+      }
+    },
+    "LoadBalancer": {
+      "Value": {
+        "Ref": "LoadBalancer"
+      }
+    },
+    "CloudFrontURL": {
+      "Value": {
+        "Fn::GetAtt": [
+          "CloudfrontDistribution",
+          "DomainName"
+        ]
+      }
+    },
+    "CloudWatchEndpoint": {
+      "Value": {
+        "Fn::Join": [
+          ".",
+          [
+            "monitoring",
+            {
+              "Ref": "AWS::Region"
+            },
+            "amazonaws.com"
+          ]
+        ]
+      }
+    },
+    "SnsBounceTopicArn": {
+      "Value": {
+        "Ref": "SnsBounceTopic"
+      },
+      "Description": "ARN of the SNS topic which holds subscription to the SQS queue for notifications to flow from SES"
+    },
+    "SnsComplaintTopicArn": {
+      "Value": {
+        "Ref": "SnsComplaintTopic"
+      },
+      "Description": "ARN of the SNS topic which holds subscription to the SQS queue for notifications to flow from SES"
+    },
+    "SnsDeliveredTopicArn": {
+      "Value": {
+        "Ref": "SnsDeliveredTopic"
+      },
+      "Description": "ARN of the SNS topic which holds subscription to the SQS queue for notifications to flow from SES"
+    },
+    "SqsDeliveredQueueUrl": {
+      "Value": {
+        "Ref": "SqsDeliveredQueue"
+      },
+      "Description": "SQS queue URL for job tracking"
+    },
+    "SqsBounceQueueUrl": {
+      "Value": {
+        "Ref": "SqsBounceQueue"
+      },
+      "Description": "SQS queue URL for job tracking"
+    },
+    "SqsComplaintQueueUrl": {
+      "Value": {
+        "Ref": "SqsComplaintQueue"
+      },
+      "Description": "SQS queue URL for job tracking"
+    }
+  }
+}
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Launches OpsWorks stack, layer, instances and associated resources to run a Event Portal application. The application runs inside an Amazon VPC with an LoadBalancer, 2 Public Subnets, 2 Private Subnets, multiple NAT/EC2 instances, REDIS cluster, and MuliAZ RDS DB.",
+  "Parameters": {
+    "Environment": {
+      "Description": "Specify the type of environment you'd like to create",
+      "Type": "String",
+      "MinLength": "2",
+      "MaxLength": "12",
+      "AllowedValues": [
+        "dev",
+        "qaa",
+        "qab",
+        "qac",
+        "reseller",
+        "stage3",
+        "prod"
+      ],
+      "Default": "dev",
+      "ConstraintDescription": "must be in the list [dev, qaa, qab, qac, stage3, prod]"
+    },
+    "Version": {
+      "Description": "Specify the type of version of the application you'd like to deploy",
+      "Type": "String",
+      "MinLength": "2",
+      "ConstraintDescription": "version number should follow semantic versioning format.. ie. 1.0.4-RC4"
+    },
+    "VpcId": {
+      "Type": "String",
+      "Description": "VPC ID where you wish to deploy these network resources. Format: vpc-xxxxxxxx",
+      "AllowedPattern": "^vpc-[0-9a-f]{8}$",
+      "ConstraintDescription": "must start with 'vpc-' followed by 8 hexadecimal characters in lowercase.",
+      "MinLength": "12",
+      "MaxLength": "12"
+    },
+    "InternetGatewayId": {
+      "Type": "String",
+      "Description": "Internet Gateway ID for the VPC where you are deploying this solution. Format: igw-xxxxxxxx",
+      "AllowedPattern": "^igw-[0-9a-f]{8}$",
+      "ConstraintDescription": "must start with 'igw-' followed by 8 hexadecimal characters in lowercase."
+    },
+    "VirtualPrivateGatewayId": {
+      "Type": "String",
+      "Description": "Virtual Private Gateway ID for the VPC where you are deploying this solution which allows you to reach back office resources. Format: vgw-xxxxxxxx",
+      "AllowedPattern": "^vgw-[0-9a-f]{8}$",
+      "MinLength": "12",
+      "MaxLength": "12",
+      "ConstraintDescription": "must start with 'vgw-' followed by 8 hexadecimal characters in lowercase."
+    },
+    "AZs": {
+      "Type": "CommaDelimitedList",
+      "Description": "In which 2 Availability Zones do you want to deploy this stack? Enter the AZs as a list of single lowercase characters, choosing from 'a', 'b', or 'c'.",
+      "ConstraintDescription": "must be an AvailabilityZone from a-c expressed as a comma delimited list of single lowercase letters."
+    },
+    "CidrBlock": {
+      "Type": "String",
+      "MinLength": "5",
+      "MaxLength": "11",
+      "Description": "First 3 octets of the /27 CIDR block for this solution.  Ex. If the solution is to be deployed into 10.83.7.0/27, then enter '10.83.7'",
+      "ConstraintDescription": "The first 3 octets of a CIDR prefix string (ex. 10.83.7)",
+      "AllowedPattern": "^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}$"
+    },
+    "NatInstanceIds": {
+      "Type": "CommaDelimitedList",
+      "Description": "Instance IDs of the 2 NAT nodes (one for each AZ) for the VPC where you are deploying.  This allows instances without an EIP to reach the Internet. Format: 'i-xxxxxxxx, i-yyyyyyyy' "
+    },
+    "SSLCertificateName": {
+      "Description": "Name of the SSL certificate for the public Load Balancer",
+      "Type": "String",
+      "MinLength": "8",
+      "MaxLength": "255"
+    },
+    "ELBCnameAlias": {
+      "Description": "DNS Alias mapped to the public Load Balancer DNS entry",
+      "Type": "String",
+      "MinLength": "8",
+      "MaxLength": "255"
+    },
+    "CDNSSLCertificateID": {
+      "Description": "ID of the SSL certificate for our CNAME'd Cloudfront domain.  NOTE: This certificate must also be in the IAM certificate store for the current AWS account.  You will need to upload it there if it is not.",
+      "Type": "String",
+      "MinLength": "8",
+      "MaxLength": "255"
+    },
+    "CDNCnameAlias": {
+      "Description": "DNS Alias mapped to the Cloudfront distribution DNS entry",
+      "Type": "String",
+      "MinLength": "8",
+      "MaxLength": "255"
+    },
+    "KeyName": {
+      "Description": "Name of an existing EC2 KeyPair to enable SSH access to the instances",
+      "Type": "AWS::EC2::KeyPair::KeyName",
+      "Default": "gsa"
+    },
+    "DBPassword": {
+      "NoEcho": "true",
+      "Description": "Admin password for MySQL database access",
+      "Type": "String",
+      "MinLength": "8",
+      "MaxLength": "41",
+      "ConstraintDescription": "must contain only ASCII characters."
+    },
+    "AssetBucket": {
+      "Type": "String",
+      "Description": "S3 bucket for application assets and uploads.",
+      "MinLength": "3",
+      "MaxLength": "255",
+      "AllowedPattern": "[\\x20-\\x7E]*",
+      "ConstraintDescription": "can contain only ASCII characters."
+    },
+    "MandrillApiKey": {
+      "Type": "String",
+      "Description": "Mandrill Api Key - Specific for each environment",
+      "MinLength": "5",
+      "MaxLength": "256",
+      "ConstraintDescription": "can contain only ASCII characters."
+    },
+    "MandrillApiUser": {
+      "Type": "String",
+      "Description": "Mandrill Api User - Specific for each environment",
+      "MinLength": "5",
+      "MaxLength": "24",
+      "ConstraintDescription": "can contain only ASCII characters."
+    },
+    "MandrillApiPwd": {
+      "Type": "String",
+      "Description": "Mandrill Api Password - Specific for each environment",
+      "MinLength": "5",
+      "MaxLength": "128",
+      "ConstraintDescription": "can contain only ASCII characters."
+    },
+    "PGiWebServicesPrefix": {
+      "Type": "String",
+      "Description": "PGi Web Services Prefix",
+      "MinLength": "12",
+      "MaxLength": "512",
+      "ConstraintDescription": "must be a valid Url"
+    },
+    "PGiWebServicesId": {
+      "Type": "String",
+      "Description": "PGi Web Services Id",
+      "MinLength": "6",
+      "MaxLength": "512",
+      "ConstraintDescription": "can contain number characters."
+    },
+    "PGiWebServicesPwd": {
+      "Type": "String",
+      "Description": "PGi Web Services Password",
+      "MinLength": "2",
+      "MaxLength": "512",
+      "ConstraintDescription": "can contain ASCII characters."
+    },
+    "PGiSecurityUrl": {
+      "Type": "String",
+      "Description": "PGi Web Services Security URL",
+      "MinLength": "2",
+      "MaxLength": "2048",
+      "ConstraintDescription": "can contain ASCII characters."
+    },
+    "PGiServicesUrl": {
+      "Type": "String",
+      "Description": "PGi Web Services  URL",
+      "MinLength": "2",
+      "MaxLength": "2048",
+      "ConstraintDescription": "can contain ASCII characters."
+    },
+    "PGiProfilesUrl": {
+      "Type": "String",
+      "Description": "PGi Web Services Profiles URL",
+      "MinLength": "2",
+      "MaxLength": "2048",
+      "ConstraintDescription": "can contain ASCII characters."
+    },
+    "PGiInMeetingUrl": {
+      "Type": "String",
+      "Description": "PGi Web Services In Meeting URL",
+      "MinLength": "2",
+      "MaxLength": "2048",
+      "ConstraintDescription": "can contain ASCII characters."
+    },
+    "PGiRefreshUrl": {
+      "Type": "String",
+      "Description": "PGi Web Services Refresh URL",
+      "MinLength": "2",
+      "MaxLength": "2048",
+      "ConstraintDescription": "can contain ASCII characters."
+    },
+    "PGiLegacyUrl": {
+      "Type": "String",
+      "Description": "Legacy Url",
+      "MinLength": "2",
+      "MaxLength": "4096",
+      "ConstraintDescription": "can contain ASCII characters."
+    },
+    "PGiAssistanceUrl": {
+      "Type": "String",
+      "Description": "Assistance Url.",
+      "MinLength": "2",
+      "MaxLength": "1024",
+      "ConstraintDescription": "can contain ASCII characters."
+    },
+    "SystemCheckUrl": {
+      "Type": "String",
+      "Description": "System Check Url.",
+      "MinLength": "2",
+      "MaxLength": "1024",
+      "ConstraintDescription": "can contain ASCII characters."
+    },
+    "GMDetectUrl": {
+      "Type": "String",
+      "Description": "GMDetect swf Url.",
+      "MinLength": "2",
+      "MaxLength": "1024",
+      "ConstraintDescription": "can contain ASCII characters."
+    },
+    "PGiClientGetSoapEnvelope": {
+      "Type": "String",
+      "Description": "SOAP Envelope for making http request posts to PGi WebServices.",
+      "MinLength": "2",
+      "MaxLength": "4096",
+      "ConstraintDescription": "can contain ASCII characters."
+    },
+    "ClientPwd": {
+      "Type": "String",
+      "Description": "PGi client password",
+      "MinLength": "2",
+      "MaxLength": "512",
+      "ConstraintDescription": "can contain ASCII characters."
+    },
+    "S3OriginId": {
+      "Type": "String",
+      "Description": "S3 Origin Id in this AWS account to use to restrict access to S3 asset bucket thru Cloudfront only",
+      "MinLength": "3",
+      "MaxLength": "255",
+      "AllowedPattern": "[\\x20-\\x7E]*",
+      "ConstraintDescription": "can contain only ASCII characters."
+    },
+    "OriginAccessIdentityCanonicalUser": {
+      "Type": "String",
+      "Description": "Canonical User Id of the Origin Access Id associated with the S3 asset bucket",
+      "MinLength": "3",
+      "MaxLength": "255",
+      "AllowedPattern": "[\\x20-\\x7E]*",
+      "ConstraintDescription": "can contain only ASCII characters."
+    },
+    "DigestEmailAddress": {
+      "Type": "String",
+      "Description": "Admin email address to send weekly digest email reports to",
+      "MinLength": "9",
+      "MaxLength": "255",
+      "AllowedPattern": "[\\x20-\\x7E]*",
+      "ConstraintDescription": "can contain only ASCII characters."
+    },
+    "OrganizerEmailAddress": {
+      "Type": "String",
+      "Description": "ICS organizer email address",
+      "MinLength": "9",
+      "MaxLength": "255",
+      "AllowedPattern": "[\\x20-\\x7E]*",
+      "ConstraintDescription": "can contain only ASCII characters."
+    },
+    "SumologicAccessID": {
+      "Description": "Sumologic AccessID to use for creating a collector",
+      "NoEcho": "true",
+      "Type": "String",
+      "MinLength": "1",
+      "MaxLength": "255",
+      "AllowedPattern": "[\\x20-\\x7E]*",
+      "ConstraintDescription": "can contain only ASCII characters."
+    },
+    "SumologicAccessKey": {
+      "Description": "Sumologic AccessKey to use for creating a collector",
+      "NoEcho": "true",
+      "Type": "String",
+      "MinLength": "1",
+      "MaxLength": "255",
+      "AllowedPattern": "[\\x20-\\x7E]*",
+      "ConstraintDescription": "can contain only ASCII characters."
+    },
+    "RepoBucket": {
+      "Type": "String",
+      "Description": "S3 Bucket containing the application deployment unit and cookbook",
+      "Default": "bob-repo",
+      "MinLength": "3",
+      "MaxLength": "255",
+      "AllowedPattern": "[\\x20-\\x7E]*",
+      "ConstraintDescription": "can contain only ASCII characters."
+    },
+    "DiagnosticsBucket": {
+      "Type": "String",
+      "Description": "S3 bucket name for diagnostics logs such as ELB access logs e.g. pgi-diagnostics-<accountname>] - may contain alphanumeric characters, periods, dashes and underscores",
+      "MinLength": "1",
+      "MaxLength": "255",
+      "AllowedPattern": "[\\x20-\\x7E]*",
+      "ConstraintDescription": "can contain only ASCII characters."
+    },
+    "LoggingPath": {
+      "Type": "String",
+      "Description": "Path to the access logging directory within the diagnostic logging bucket e.g. elb-access-logs/event-portal/prod (remember not to end this in a forward slash!)",
+      "MinLength": "12",
+      "MaxLength": "1024",
+      "AllowedPattern": "[\\x20-\\x7E]*",
+      "ConstraintDescription": "can contain only ASCII characters."
+    }
+  },
+  "Resources": {
+    "PublicRouteTable": {
+      "Type": "AWS::EC2::RouteTable",
+      "Properties": {
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "Tags": [
+          {
+            "Key": "Network",
+            "Value": "Public"
+          },
+          {
+            "Key": "Name",
+            "Value": "Event Portal Public Route Table"
+          },
+          {
+            "Key": "Name",
+            "Value": "EventPortal Public Route Table"
+          }
+        ]
+      }
+    },
+    "PublicRoute": {
+      "Type": "AWS::EC2::Route",
+      "Properties": {
+        "RouteTableId": {
+          "Ref": "PublicRouteTable"
+        },
+        "DestinationCidrBlock": "0.0.0.0/0",
+        "GatewayId": {
+          "Ref": "InternetGatewayId"
+        }
+      }
+    },
+    "SubnetPublic0": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "CidrBlock": {
+          "Fn::Join": [
+            "",
+            [
+              {
+                "Ref": "CidrBlock"
+              },
+              ".",
+              "0/27"
+            ]
+          ]
+        },
+        "AvailabilityZone": {
+          "Fn::Join": [
+            "",
+            [
+              {
+                "Ref": "AWS::Region"
+              },
+              {
+                "Fn::Select": [
+                  0,
+                  {
+                    "Ref": "AZs"
+                  }
+                ]
+              }
+            ]
+          ]
+        },
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "Tags": [
+          {
+            "Key": "Zone",
+            "Value": {
+              "Fn::Join": [
+                "",
+                [
+                  {
+                    "Ref": "AWS::Region"
+                  },
+                  {
+                    "Fn::Select": [
+                      0,
+                      {
+                        "Ref": "AZs"
+                      }
+                    ]
+                  }
+                ]
+              ]
+            }
+          },
+          {
+            "Key": "Network",
+            "Value": "Public"
+          },
+          {
+            "Key": "Name",
+            "Value": "Event Portal Subnet Public 0"
+          },
+          {
+            "Key": "Name",
+            "Value": "EventPortal Subnet Public 0"
+          }
+        ]
+      }
+    },
+    "PublicSubnetRouteTableAssociation0": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties": {
+        "SubnetId": {
+          "Ref": "SubnetPublic0"
+        },
+        "RouteTableId": {
+          "Ref": "PublicRouteTable"
+        }
+      }
+    },
+    "SubnetPublic1": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "CidrBlock": {
+          "Fn::Join": [
+            "",
+            [
+              {
+                "Ref": "CidrBlock"
+              },
+              ".",
+              "32/27"
+            ]
+          ]
+        },
+        "AvailabilityZone": {
+          "Fn::Join": [
+            "",
+            [
+              {
+                "Ref": "AWS::Region"
+              },
+              {
+                "Fn::Select": [
+                  1,
+                  {
+                    "Ref": "AZs"
+                  }
+                ]
+              }
+            ]
+          ]
+        },
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "Tags": [
+          {
+            "Key": "Zone",
+            "Value": {
+              "Fn::Join": [
+                "",
+                [
+                  {
+                    "Ref": "AWS::Region"
+                  },
+                  {
+                    "Fn::Select": [
+                      1,
+                      {
+                        "Ref": "AZs"
+                      }
+                    ]
+                  }
+                ]
+              ]
+            }
+          },
+          {
+            "Key": "Network",
+            "Value": "Public"
+          },
+          {
+            "Key": "Name",
+            "Value": "Event Portal Subnet Public 1"
+          },
+          {
+            "Key": "Name",
+            "Value": "EventPortal Subnet Public 1"
+          }
+        ]
+      }
+    },
+    "PublicSubnetRouteTableAssociation1": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties": {
+        "SubnetId": {
+          "Ref": "SubnetPublic1"
+        },
+        "RouteTableId": {
+          "Ref": "PublicRouteTable"
+        }
+      }
+    },
+    "SubnetPrivate0": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "CidrBlock": {
+          "Fn::Join": [
+            "",
+            [
+              {
+                "Ref": "CidrBlock"
+              },
+              ".",
+              "64/27"
+            ]
+          ]
+        },
+        "AvailabilityZone": {
+          "Fn::Join": [
+            "",
+            [
+              {
+                "Ref": "AWS::Region"
+              },
+              {
+                "Fn::Select": [
+                  0,
+                  {
+                    "Ref": "AZs"
+                  }
+                ]
+              }
+            ]
+          ]
+        },
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "Tags": [
+          {
+            "Key": "Zone",
+            "Value": {
+              "Fn::Join": [
+                "",
+                [
+                  {
+                    "Ref": "AWS::Region"
+                  },
+                  {
+                    "Fn::Select": [
+                      0,
+                      {
+                        "Ref": "AZs"
+                      }
+                    ]
+                  }
+                ]
+              ]
+            }
+          },
+          {
+            "Key": "Network",
+            "Value": "Private"
+          },
+          {
+            "Key": "Name",
+            "Value": "Event Portal Subnet Private 0"
+          },
+          {
+            "Key": "Name",
+            "Value": "EventPortal Subnet Private 0"
+          }
+        ]
+      }
+    },
+    "PrivateRouteTable0": {
+      "Type": "AWS::EC2::RouteTable",
+      "Properties": {
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "Tags": [
+          {
+            "Key": "Network",
+            "Value": "Private"
+          },
+          {
+            "Key": "Name",
+            "Value": "Event Portal Private Route Table 0"
+          },
+          {
+            "Key": "Name",
+            "Value": "EventPortal Private Route Table 0"
+          }
+        ]
+      }
+    },
+    "PrivateSubnetRouteTableAssociation0": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties": {
+        "SubnetId": {
+          "Ref": "SubnetPrivate0"
+        },
+        "RouteTableId": {
+          "Ref": "PrivateRouteTable0"
+        }
+      }
+    },
+    "PrivateRoute0": {
+      "Type": "AWS::EC2::Route",
+      "DependsOn": "PrivateRouteTable0",
+      "Properties": {
+        "RouteTableId": {
+          "Ref": "PrivateRouteTable0"
+        },
+        "DestinationCidrBlock": "0.0.0.0/0",
+        "InstanceId": {
+          "Fn::Select": [
+            0,
+            {
+              "Ref": "NatInstanceIds"
+            }
+          ]
+        }
+      }
+    },
+    "PrivateRouteToPGI0": {
+      "Type": "AWS::EC2::Route",
+      "DependsOn": "PrivateRouteTable0",
+      "Properties": {
+        "RouteTableId": {
+          "Ref": "PrivateRouteTable0"
+        },
+        "DestinationCidrBlock": "10.0.0.0/8",
+        "GatewayId": {
+          "Ref": "VirtualPrivateGatewayId"
+        }
+      }
+    },
+    "Instance0": {
+      "Type": "AWS::OpsWorks::Instance",
+      "DependsOn": "EventPortalServiceLayer",
+      "Properties": {
+        "StackId": {
+          "Ref": "EventPortalStack"
+        },
+        "LayerIds": [
+          {
+            "Ref": "EventPortalServiceLayer"
+          }
+        ],
+        "InstanceType": "m3.medium",
+        "InstallUpdatesOnBoot": true,
+        "SubnetId": {
+          "Ref": "SubnetPrivate0"
+        }
+      }
+    },
+    "SubnetPrivate1": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "CidrBlock": {
+          "Fn::Join": [
+            "",
+            [
+              {
+                "Ref": "CidrBlock"
+              },
+              ".",
+              "96/27"
+            ]
+          ]
+        },
+        "AvailabilityZone": {
+          "Fn::Join": [
+            "",
+            [
+              {
+                "Ref": "AWS::Region"
+              },
+              {
+                "Fn::Select": [
+                  1,
+                  {
+                    "Ref": "AZs"
+                  }
+                ]
+              }
+            ]
+          ]
+        },
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "Tags": [
+          {
+            "Key": "Zone",
+            "Value": {
+              "Fn::Join": [
+                "",
+                [
+                  {
+                    "Ref": "AWS::Region"
+                  },
+                  {
+                    "Fn::Select": [
+                      1,
+                      {
+                        "Ref": "AZs"
+                      }
+                    ]
+                  }
+                ]
+              ]
+            }
+          },
+          {
+            "Key": "Network",
+            "Value": "Private"
+          },
+          {
+            "Key": "Name",
+            "Value": "Event Portal Subnet Private 1"
+          },
+          {
+            "Key": "Name",
+            "Value": "EventPortal Subnet Private 1"
+          }
+        ]
+      }
+    },
+    "PrivateRouteTable1": {
+      "Type": "AWS::EC2::RouteTable",
+      "Properties": {
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "Tags": [
+          {
+            "Key": "Network",
+            "Value": "Private"
+          },
+          {
+            "Key": "Name",
+            "Value": "Event Portal Private Route Table 1"
+          },
+          {
+            "Key": "Name",
+            "Value": "EventPortal Private Route Table 1"
+          }
+        ]
+      }
+    },
+    "PrivateSubnetRouteTableAssociation1": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties": {
+        "SubnetId": {
+          "Ref": "SubnetPrivate1"
+        },
+        "RouteTableId": {
+          "Ref": "PrivateRouteTable1"
+        }
+      }
+    },
+    "PrivateRoute1": {
+      "Type": "AWS::EC2::Route",
+      "DependsOn": "PrivateRouteTable1",
+      "Properties": {
+        "RouteTableId": {
+          "Ref": "PrivateRouteTable1"
+        },
+        "DestinationCidrBlock": "0.0.0.0/0",
+        "InstanceId": {
+          "Fn::Select": [
+            1,
+            {
+              "Ref": "NatInstanceIds"
+            }
+          ]
+        }
+      }
+    },
+    "PrivateRouteToPGI1": {
+      "Type": "AWS::EC2::Route",
+      "DependsOn": "PrivateRouteTable1",
+      "Properties": {
+        "RouteTableId": {
+          "Ref": "PrivateRouteTable1"
+        },
+        "DestinationCidrBlock": "10.0.0.0/8",
+        "GatewayId": {
+          "Ref": "VirtualPrivateGatewayId"
+        }
+      }
+    },
+    "Instance1": {
+      "Type": "AWS::OpsWorks::Instance",
+      "DependsOn": [
+        "Instance0",
+        "EventPortalServiceLayer"
+      ],
+      "Properties": {
+        "StackId": {
+          "Ref": "EventPortalStack"
+        },
+        "LayerIds": [
+          {
+            "Ref": "EventPortalServiceLayer"
+          }
+        ],
+        "InstanceType": "m3.medium",
+        "InstallUpdatesOnBoot": true,
+        "SubnetId": {
+          "Ref": "SubnetPrivate1"
+        }
+      }
+    },
+    "LoadBalancer": {
+      "Type": "AWS::ElasticLoadBalancing::LoadBalancer",
+      "Properties": {
+        "Subnets": [
+          {
+            "Ref": "SubnetPublic0"
+          },
+          {
+            "Ref": "SubnetPublic1"
+          }
+        ],
+        "HealthCheck": {
+          "Target": "HTTP:8080/ui/health.html",
+          "Interval": "30",
+          "Timeout": "5",
+          "UnhealthyThreshold": "2",
+          "HealthyThreshold": "10"
+        },
+        "SecurityGroups": [
+          {
+            "Ref": "LoadBalancerSecurityGroup"
+          }
+        ],
+        "Listeners": [
+          {
+            "InstancePort": "8080",
+            "LoadBalancerPort": "443",
+            "Protocol": "HTTPS",
+            "InstanceProtocol": "HTTP",
+            "SSLCertificateId": {
+              "Fn::Join": [
+                "",
+                [
+                  "arn:aws:iam::",
+                  {
+                    "Ref": "AWS::AccountId"
+                  },
+                  ":server-certificate/",
+                  {
+                    "Ref": "SSLCertificateName"
+                  }
+                ]
+              ]
+            }
+          }
+        ],
+        "AccessLoggingPolicy": {
+          "EmitInterval": "5",
+          "Enabled": true,
+          "S3BucketName": {
+            "Ref": "DiagnosticsBucket"
+          },
+          "S3BucketPrefix": {
+            "Ref": "LoggingPath"
+          }
+        }
+      }
+    },
+    "LoadBalancerAttachment": {
+      "Type": "AWS::OpsWorks::ElasticLoadBalancerAttachment",
+      "Properties": {
+        "ElasticLoadBalancerName": {
+          "Ref": "LoadBalancer"
+        },
+        "LayerId": {
+          "Ref": "EventPortalServiceLayer"
+        }
+      }
+    },
+    "EventPortalUser": {
+      "Type": "AWS::IAM::User"
+    },
+    "EventPortalUserKey": {
+      "Type": "AWS::IAM::AccessKey",
+      "Properties": {
+        "UserName": {
+          "Ref": "EventPortalUser"
+        }
+      }
+    },
+    "EventPortalGroup": {
+      "Type": "AWS::IAM::Group",
+      "Properties": {
+        "Policies": [
+          {
+            "PolicyName": "EventPortalS3GroupPolicy",
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Action": [
+                    "s3:GetBucketLocation",
+                    "s3:ListAllMyBuckets"
+                  ],
+                  "Effect": "Allow",
+                  "Resource": [
+                    "arn:aws:s3:::*"
+                  ]
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:List*",
+                    "s3:Get*"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::Join": [
+                        "",
+                        [
+                          "arn:aws:s3:::",
+                          {
+                            "Ref": "RepoBucket"
+                          },
+                          "/globalmeet-seminar/*"
+                        ]
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "AddUserToEventPortalGroup": {
+      "Type": "AWS::IAM::UserToGroupAddition",
+      "Properties": {
+        "GroupName": {
+          "Ref": "EventPortalGroup"
+        },
+        "Users": [
+          {
+            "Ref": "EventPortalUser"
+          }
+        ]
+      }
+    },
+    "EventPortalStack": {
+      "Type": "AWS::OpsWorks::Stack",
+      "Properties": {
+        "Name": {
+          "Ref": "AWS::StackName"
+        },
+        "ServiceRoleArn": {
+          "Fn::GetAtt": [
+            "OpsWorksServiceRole",
+            "Arn"
+          ]
+        },
+        "DefaultInstanceProfileArn": {
+          "Fn::GetAtt": [
+            "OpsWorksInstanceProfile",
+            "Arn"
+          ]
+        },
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "DefaultSubnetId": {
+          "Ref": "SubnetPrivate1"
+        },
+        "DefaultSshKeyName": {
+          "Ref": "KeyName"
+        },
+        "ConfigurationManager": {
+          "Name": "Chef",
+          "Version": "11.10"
+        },
+        "UseCustomCookbooks": "true",
+        "CustomCookbooksSource": {
+          "Type": "s3",
+          "Url": {
+            "Fn::Join": [
+              "",
+              [
+                "https://",
+                {
+                  "Ref": "RepoBucket"
+                },
+                ".s3.amazonaws.com/globalmeet-seminar/cookbook-",
+                {
+                  "Ref": "Version"
+                },
+                ".tar.gz"
+              ]
+            ]
+          },
+          "Username": {
+            "Ref": "EventPortalUserKey"
+          },
+          "Password": {
+            "Fn::GetAtt": [
+              "EventPortalUserKey",
+              "SecretAccessKey"
+            ]
+          }
+        },
+        "CustomJson": {
+          "event_portal": {
+            "environment": {
+              "Ref": "Environment"
+            },
+            "version": {
+              "Ref": "Version"
+            },
+            "asset_bucket": {
+              "Ref": "AssetBucket"
+            },
+            "repo_bucket": {
+              "Ref": "RepoBucket"
+            },
+            "host": {
+              "Ref": "ELBCnameAlias"
+            },
+            "cloudfront_url": {
+              "Fn::Join": [
+                "",
+                [
+                  "https://",
+                  {
+                    "Ref": "CDNCnameAlias"
+                  }
+                ]
+              ]
+            },
+            "digest_email_address": {
+              "Ref": "DigestEmailAddress"
+            },
+            "organizer_email_address": {
+              "Ref": "OrganizerEmailAddress"
+            }
+          },
+          "database": {
+            "host": {
+              "Fn::GetAtt": [
+                "RDSInstance",
+                "Endpoint.Address"
+              ]
+            },
+            "port": {
+              "Fn::GetAtt": [
+                "RDSInstance",
+                "Endpoint.Port"
+              ]
+            },
+            "name": "event_portal",
+            "username": "master",
+            "password": {
+              "Ref": "DBPassword"
+            },
+            "reconnect": true
+          },
+          "redis": {
+            "cluster_id": {
+              "Ref": "AWS::StackName"
+            }
+          },
+          "pgi": {
+            "web_services_prefix": {
+              "Ref": "PGiWebServicesPrefix"
+            },
+            "web_services_id": {
+              "Ref": "PGiWebServicesId"
+            },
+            "web_services_password": {
+              "Ref": "PGiWebServicesPwd"
+            },
+            "security_url": {
+              "Ref": "PGiSecurityUrl"
+            },
+            "services_url": {
+              "Ref": "PGiServicesUrl"
+            },
+            "profile_url": {
+              "Ref": "PGiProfilesUrl"
+            },
+            "in_meeting_url": {
+              "Ref": "PGiInMeetingUrl"
+            },
+            "refresh_url": {
+              "Ref": "PGiRefreshUrl"
+            },
+            "legacy_base_url": {
+              "Ref": "PGiLegacyUrl"
+            },
+            "web_assistance_url": {
+              "Ref": "PGiAssistanceUrl"
+            },
+            "system_check_url": {
+              "Ref": "SystemCheckUrl"
+            },
+            "gmdetect_url": {
+              "Ref": "GMDetectUrl"
+            },
+            "client_password": {
+              "Ref": "ClientPwd"
+            },
+            "clientget_soapenvelope": {
+              "Ref": "PGiClientGetSoapEnvelope"
+            }
+          },
+          "mandrill": {
+            "user": {
+              "Ref": "MandrillApiUser"
+            },
+            "pass": {
+              "Ref": "MandrillApiPwd"
+            },
+            "api_key": {
+              "Ref": "MandrillApiKey"
+            }
+          },
+          "opsworks": {
+            "data_bags": {
+              "sumo-creds": {
+                "api-creds": {
+                  "accessID": {
+                    "Ref": "SumologicAccessID"
+                  },
+                  "accessKey": {
+                    "Ref": "SumologicAccessKey"
+                  }
+                }
+              }
+            },
+            "ruby_version": "2.0.0"
+          },
+          "ruby": {
+            "patch_version": "p647"
+          }
+        }
+      }
+    },
+    "EventPortalServiceLayer": {
+      "Type": "AWS::OpsWorks::Layer",
+      "Metadata": {
+        "Comment": "OpsWorks instances require outbound Internet access. Using DependsOn to make sure outbound Internet Access is estlablished before creating instances in this layer."
+      },
+      "DependsOn": [
+        "PublicRoute",
+        "SubnetPublic0",
+        "SubnetPublic1",
+        "SubnetPrivate0",
+        "SubnetPrivate1"
+      ],
+      "Properties": {
+        "StackId": {
+          "Ref": "EventPortalStack"
+        },
+        "Name": {
+          "Ref": "AWS::StackName"
+        },
+        "Type": "custom",
+        "Shortname": "event_portal",
+        "EnableAutoHealing": "true",
+        "AutoAssignElasticIps": "false",
+        "AutoAssignPublicIps": "false",
+        "CustomSecurityGroupIds": [
+          {
+            "Ref": "WebServerSecurityGroup"
+          }
+        ],
+        "CustomRecipes": {
+          "Setup": [
+            "event_portal::default"
+          ]
+        }
+      }
+    },
+    "OpsWorksServiceRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": [
+                  "opsworks.amazonaws.com"
+                ]
+              },
+              "Action": [
+                "sts:AssumeRole"
+              ]
+            }
+          ]
+        },
+        "Path": "/",
+        "Policies": [
+          {
+            "PolicyName": "opsworks-service",
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "ec2:*",
+                    "s3:*",
+                    "iam:PassRole",
+                    "cloudwatch:GetMetricStatistics",
+                    "elasticloadbalancing:*"
+                  ],
+                  "Resource": "*"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "OpsWorksInstanceRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": [
+                  "ec2.amazonaws.com"
+                ]
+              },
+              "Action": [
+                "sts:AssumeRole"
+              ]
+            }
+          ]
+        },
+        "Path": "/",
+        "Policies": [
+          {
+            "PolicyName": "opsworks-instance",
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "elasticache:*",
+                    "s3:*",
+                    "ec2:*",
+                    "elasticloadbalancing:*",
+                    "iam:PassRole",
+                    "cloudwatch:PutMetricData",
+                    "cloudwatch:GetMetricStatistics",
+                    "cloudwatch:ListMetrics",
+                    "ec2:DescribeTags"
+                  ],
+                  "Resource": "*"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "OpsWorksInstanceProfile": {
+      "Type": "AWS::IAM::InstanceProfile",
+      "Properties": {
+        "Path": "/",
+        "Roles": [
+          {
+            "Ref": "OpsWorksInstanceRole"
+          }
+        ]
+      }
+    },
+    "LoadBalancerSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Enable only SSL traffic from internet on port 443",
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": "443",
+            "ToPort": "443",
+            "CidrIp": "0.0.0.0/0"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Network",
+            "Value": "Public"
+          },
+          {
+            "Key": "Name",
+            "Value": "Event Portal Load Balancer Security Group"
+          },
+          {
+            "Key": "Name",
+            "Value": "EventPortal Load Balancer Security Group"
+          }
+        ]
+      }
+    },
+    "WebServerSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Allow inbound requests from the LoadBalancer to the OpsWorks instances",
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": "8080",
+            "ToPort": "8080",
+            "SourceSecurityGroupId": {
+              "Ref": "LoadBalancerSecurityGroup"
+            }
+          }
+        ],
+        "SecurityGroupEgress": [
+          {
+            "IpProtocol": "-1",
+            "CidrIp": "0.0.0.0/0"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Network",
+            "Value": "Private"
+          },
+          {
+            "Key": "Name",
+            "Value": "Event Portal Web Server Security Group"
+          },
+          {
+            "Key": "Name",
+            "Value": "EventPortal Web Server Security Group"
+          }
+        ]
+      }
+    },
+    "NATSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Enable internal access to the NAT device",
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "-1",
+            "SourceSecurityGroupId": {
+              "Ref": "WebServerSecurityGroup"
+            }
+          }
+        ],
+        "SecurityGroupEgress": [
+          {
+            "IpProtocol": "-1",
+            "CidrIp": "0.0.0.0/0"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Network",
+            "Value": "Private"
+          },
+          {
+            "Key": "Name",
+            "Value": "Event Portal NATSecurity Group"
+          },
+          {
+            "Key": "Name",
+            "Value": "EventPortal NATSecurity Group"
+          }
+        ]
+      }
+    },
+    "ElasticCacheSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Lock down access to cache only to webserver instances",
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": "6379",
+            "ToPort": "6379",
+            "SourceSecurityGroupId": {
+              "Ref": "WebServerSecurityGroup"
+            }
+          }
+        ],
+        "SecurityGroupEgress": [
+          {
+            "IpProtocol": "-1",
+            "CidrIp": "0.0.0.0/0"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Network",
+            "Value": "Private"
+          },
+          {
+            "Key": "Name",
+            "Value": "Event Portal Elastic Cache Security Group"
+          },
+          {
+            "Key": "Name",
+            "Value": "EventPortal Elastic Cache Security Group"
+          }
+        ]
+      }
+    },
+    "DBSecurityGroup": {
+      "Type": "AWS::RDS::DBSecurityGroup",
+      "Properties": {
+        "GroupDescription": "DB access from webservers",
+        "EC2VpcId": {
+          "Ref": "VpcId"
+        },
+        "DBSecurityGroupIngress": [
+          {
+            "EC2SecurityGroupId": {
+              "Fn::GetAtt": [
+                "WebServerSecurityGroup",
+                "GroupId"
+              ]
+            }
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Network",
+            "Value": "Private"
+          },
+          {
+            "Key": "Name",
+            "Value": "Event Portal DBSecurity Group"
+          },
+          {
+            "Key": "Name",
+            "Value": "EventPortal DBSecurity Group"
+          }
+        ]
+      }
+    },
+    "S3Bucket": {
+      "Type": "AWS::S3::Bucket",
+      "Properties": {
+        "BucketName": {
+          "Ref": "AssetBucket"
+        },
+        "AccessControl": "PublicRead",
+        "Tags": [
+          {
+            "Key": "Network",
+            "Value": "Public"
+          },
+          {
+            "Key": "Name",
+            "Value": "EventPortal S3 Bucket"
+          }
+        ],
+        "CorsConfiguration": {
+          "CorsRules": [
+            {
+              "AllowedHeaders": [
+                "Authorization"
+              ],
+              "AllowedOrigins": [
+                "*"
+              ],
+              "AllowedMethods": [
+                "GET"
+              ],
+              "MaxAge": "3000"
+            }
+          ]
+        }
+      }
+    },
+    "AssetBucketPolicy": {
+      "Type": "AWS::S3::BucketPolicy",
+      "DependsOn": "S3Bucket",
+      "Properties": {
+        "PolicyDocument": {
+          "Id": "EventPortalAssetBucketPolicy",
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "ReadAccess",
+              "Action": [
+                "s3:GetObject"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    "arn:aws:s3:::",
+                    {
+                      "Ref": "AssetBucket"
+                    },
+                    "/*"
+                  ]
+                ]
+              },
+              "Principal": {
+                "CanonicalUser": {
+                  "Ref": "OriginAccessIdentityCanonicalUser"
+                }
+              }
+            }
+          ]
+        },
+        "Bucket": {
+          "Ref": "AssetBucket"
+        }
+      }
+    },
+    "CloudfrontDistribution": {
+      "Type": "AWS::CloudFront::Distribution",
+      "DependsOn": "S3Bucket",
+      "Properties": {
+        "DistributionConfig": {
+          "Comment": "Event Portal static assets served from CNAMEd domain over SSL w/ SNI",
+          "Enabled": "true",
+          "Aliases": [
+            {
+              "Ref": "CDNCnameAlias"
+            }
+          ],
+          "Origins": [
+            {
+              "DomainName": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Ref": "AssetBucket"
+                    },
+                    ".s3.amazonaws.com"
+                  ]
+                ]
+              },
+              "Id": "EventPortalS3Origin",
+              "S3OriginConfig": {
+                "OriginAccessIdentity": {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "origin-access-identity/cloudfront/",
+                      {
+                        "Ref": "S3OriginId"
+                      }
+                    ]
+                  ]
+                }
+              }
+            }
+          ],
+          "ViewerCertificate": {
+            "IamCertificateId": {
+              "Ref": "CDNSSLCertificateID"
+            },
+            "SslSupportMethod": "sni-only"
+          },
+          "DefaultRootObject": "index.html",
+          "Logging": {
+            "Bucket": {
+              "Fn::Join": [
+                "",
+                [
+                  "pgi-logs-",
+                  {
+                    "Ref": "AWS::Region"
+                  },
+                  "-development.s3.amazonaws.com"
+                ]
+              ]
+            },
+            "Prefix": "event-portal"
+          },
+          "DefaultCacheBehavior": {
+            "TargetOriginId": "EventPortalS3Origin",
+            "ForwardedValues": {
+              "QueryString": "true"
+            },
+            "ViewerProtocolPolicy": "redirect-to-https"
+          }
+        }
+      }
+    },
+    "ElasticCacheSubnetGroup": {
+      "Type": "AWS::ElastiCache::SubnetGroup",
+      "Properties": {
+        "Description": "Event Portal Private access to cache from instances",
+        "SubnetIds": [
+          {
+            "Ref": "SubnetPrivate0"
+          },
+          {
+            "Ref": "SubnetPrivate1"
+          }
+        ]
+      }
+    },
+    "ElasticCacheCluster": {
+      "Type": "AWS::ElastiCache::CacheCluster",
+      "Properties": {
+        "ClusterName": {
+          "Ref": "AWS::StackName"
+        },
+        "CacheNodeType": "cache.m3.medium",
+        "Engine": "redis",
+        "EngineVersion": "2.8.6",
+        "NumCacheNodes": "1",
+        "CacheSubnetGroupName": {
+          "Ref": "ElasticCacheSubnetGroup"
+        },
+        "VpcSecurityGroupIds": [
+          {
+            "Fn::GetAtt": [
+              "ElasticCacheSecurityGroup",
+              "GroupId"
+            ]
+          }
+        ],
+        "PreferredAvailabilityZone": {
+          "Fn::Join": [
+            "",
+            [
+              {
+                "Ref": "AWS::Region"
+              },
+              {
+                "Fn::Select": [
+                  0,
+                  {
+                    "Ref": "AZs"
+                  }
+                ]
+              }
+            ]
+          ]
+        },
+        "PreferredMaintenanceWindow": "wed:03:00-wed:04:00",
+        "AutoMinorVersionUpgrade": "true"
+      }
+    },
+    "DBSubnetGroup": {
+      "Type": "AWS::RDS::DBSubnetGroup",
+      "Properties": {
+        "DBSubnetGroupDescription": "Event Portal Private access to DB from instances",
+        "SubnetIds": [
+          {
+            "Ref": "SubnetPrivate0"
+          },
+          {
+            "Ref": "SubnetPrivate1"
+          }
+        ]
+      }
+    },
+    "RDSInstance": {
+      "Type": "AWS::RDS::DBInstance",
+      "Properties": {
+        "MultiAZ": "true",
+        "DBInstanceClass": "db.m3.medium",
+        "DBInstanceIdentifier": {
+          "Ref": "AWS::StackName"
+        },
+        "DBSecurityGroups": [
+          {
+            "Ref": "DBSecurityGroup"
+          }
+        ],
+        "DBSubnetGroupName": {
+          "Ref": "DBSubnetGroup"
+        },
+        "AllocatedStorage": "100",
+        "DBName": "event_portal",
+        "Engine": "MySQL",
+        "MasterUsername": "master",
+        "MasterUserPassword": {
+          "Ref": "DBPassword"
+        },
+        "AutoMinorVersionUpgrade": "true",
+        "BackupRetentionPeriod": "35",
+        "PreferredBackupWindow": "07:00-07:30",
+        "PreferredMaintenanceWindow": "sun:05:50-sun:06:20",
+        "Tags": [
+          {
+            "Key": "Network",
+            "Value": "Private"
+          },
+          {
+            "Key": "workload-type",
+            "Value": "staging"
+          },
+          {
+            "Key": "Name",
+            "Value": "Event Portal RDSInstance"
+          },
+          {
+            "Key": "Name",
+            "Value": "EventPortal RDSInstance"
+          }
+        ]
+      }
+    },
+    "SqsDeliveredQueue": {
+      "Type": "AWS::SQS::Queue",
+      "Properties": {
+        "DelaySeconds": 0,
+        "MessageRetentionPeriod": 1209600,
+        "QueueName": {
+          "Fn::Join": [
+            "",
+            [
+              null,
+              "-",
+              {
+                "Ref": "Environment"
+              },
+              "-DeliveredQueue"
+            ]
+          ]
+        },
+        "ReceiveMessageWaitTimeSeconds": 5,
+        "VisibilityTimeout": 1200
+      }
+    },
+    "SqsBounceQueue": {
+      "Type": "AWS::SQS::Queue",
+      "DependsOn": [
+        "SqsDeliveredQueue"
+      ],
+      "Properties": {
+        "DelaySeconds": 0,
+        "MessageRetentionPeriod": 1209600,
+        "QueueName": {
+          "Fn::Join": [
+            "",
+            [
+              null,
+              "-",
+              {
+                "Ref": "Environment"
+              },
+              "-BounceQueue"
+            ]
+          ]
+        },
+        "ReceiveMessageWaitTimeSeconds": 5,
+        "RedrivePolicy": {
+          "deadLetterTargetArn": {
+            "Fn::GetAtt": [
+              "SqsDeliveredQueue",
+              "Arn"
+            ]
+          },
+          "maxReceiveCount": "5"
+        },
+        "VisibilityTimeout": 1200
+      }
+    },
+    "SqsComplaintQueue": {
+      "Type": "AWS::SQS::Queue",
+      "DependsOn": [
+        "SqsDeliveredQueue"
+      ],
+      "Properties": {
+        "DelaySeconds": 0,
+        "MessageRetentionPeriod": 1209600,
+        "QueueName": {
+          "Fn::Join": [
+            "",
+            [
+              null,
+              "-",
+              {
+                "Ref": "Environment"
+              },
+              "-ComplaintQueue"
+            ]
+          ]
+        },
+        "ReceiveMessageWaitTimeSeconds": 5,
+        "RedrivePolicy": {
+          "deadLetterTargetArn": {
+            "Fn::GetAtt": [
+              "SqsDeliveredQueue",
+              "Arn"
+            ]
+          },
+          "maxReceiveCount": "5"
+        },
+        "VisibilityTimeout": 1200
+      }
+    },
+    "SnsDeliveredTopic": {
+      "Type": "AWS::SNS::Topic",
+      "DependsOn": [
+        "SqsDeliveredQueue"
+      ],
+      "Properties": {
+        "Subscription": [
+          {
+            "Endpoint": {
+              "Fn::GetAtt": [
+                "SqsDeliveredQueue",
+                "Arn"
+              ]
+            },
+            "Protocol": "sqs"
+          }
+        ],
+        "DisplayName": {
+          "Fn::Join": [
+            "",
+            [
+              null,
+              "-",
+              {
+                "Ref": "Environment"
+              },
+              "-Delivered"
+            ]
+          ]
+        },
+        "TopicName": {
+          "Fn::Join": [
+            "",
+            [
+              null,
+              "-",
+              {
+                "Ref": "Environment"
+              },
+              "-Delivered"
+            ]
+          ]
+        }
+      }
+    },
+    "SnsBounceTopic": {
+      "Type": "AWS::SNS::Topic",
+      "DependsOn": [
+        "SqsBounceQueue"
+      ],
+      "Properties": {
+        "Subscription": [
+          {
+            "Endpoint": {
+              "Fn::GetAtt": [
+                "SqsBounceQueue",
+                "Arn"
+              ]
+            },
+            "Protocol": "sqs"
+          }
+        ],
+        "DisplayName": {
+          "Fn::Join": [
+            "",
+            [
+              null,
+              "-",
+              {
+                "Ref": "Environment"
+              },
+              "}-Bounce"
+            ]
+          ]
+        },
+        "TopicName": {
+          "Fn::Join": [
+            "",
+            [
+              null,
+              "-",
+              {
+                "Ref": "Environment"
+              },
+              "-Bounce"
+            ]
+          ]
+        }
+      }
+    },
+    "SnsComplaintTopic": {
+      "Type": "AWS::SNS::Topic",
+      "DependsOn": [
+        "SqsComplaintQueue"
+      ],
+      "Properties": {
+        "Subscription": [
+          {
+            "Endpoint": {
+              "Fn::GetAtt": [
+                "SqsComplaintQueue",
+                "Arn"
+              ]
+            },
+            "Protocol": "sqs"
+          }
+        ],
+        "DisplayName": {
+          "Fn::Join": [
+            "",
+            [
+              null,
+              "-",
+              {
+                "Ref": "Environment"
+              },
+              "-Complaint"
+            ]
+          ]
+        },
+        "TopicName": {
+          "Fn::Join": [
+            "",
+            [
+              null,
+              "-",
+              {
+                "Ref": "Environment"
+              },
+              "-Complaint"
+            ]
+          ]
+        }
+      }
+    },
+    "SqsDeliveredQueuePolicy": {
+      "Type": "AWS::SQS::QueuePolicy",
+      "DependsOn": [
+        "SqsDeliveredQueue",
+        "SnsDeliveredTopic"
+      ],
+      "Properties": {
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "sqs-sns-access",
+              "Effect": "Allow",
+              "Principal": "*",
+              "Action": [
+                "sqs:SendMessage"
+              ],
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "SqsDeliveredQueue",
+                    "Arn"
+                  ]
+                }
+              ],
+              "Condition": {
+                "ArnEquals": {
+                  "aws:SourceArn": {
+                    "Ref": "SnsDeliveredTopic"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "Queues": [
+          {
+            "Ref": "SqsDeliveredQueue"
+          }
+        ]
+      }
+    },
+    "SqsBounceQueuePolicy": {
+      "Type": "AWS::SQS::QueuePolicy",
+      "DependsOn": [
+        "SqsBounceQueue",
+        "SnsBounceTopic"
+      ],
+      "Properties": {
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "sqs-sns-access",
+              "Effect": "Allow",
+              "Principal": "*",
+              "Action": [
+                "sqs:SendMessage"
+              ],
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "SqsBounceQueue",
+                    "Arn"
+                  ]
+                }
+              ],
+              "Condition": {
+                "ArnEquals": {
+                  "aws:SourceArn": {
+                    "Ref": "SnsBounceTopic"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "Queues": [
+          {
+            "Ref": "SqsBounceQueue"
+          }
+        ]
+      }
+    },
+    "SqsComplaintQueuePolicy": {
+      "Type": "AWS::SQS::QueuePolicy",
+      "DependsOn": [
+        "SqsComplaintQueue",
+        "SnsComplaintTopic"
+      ],
+      "Properties": {
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "sqs-sns-access",
+              "Effect": "Allow",
+              "Principal": "*",
+              "Action": [
+                "sqs:SendMessage"
+              ],
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "SqsComplaintQueue",
+                    "Arn"
+                  ]
+                }
+              ],
+              "Condition": {
+                "ArnEquals": {
+                  "aws:SourceArn": {
+                    "Ref": "SnsComplaintTopic"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "Queues": [
+          {
+            "Ref": "SqsComplaintQueue"
+          }
+        ]
+      }
+    }
+  },
+  "Outputs": {
+    "StackId": {
+      "Value": {
+        "Ref": "EventPortalStack"
+      }
+    },
+    "LoadBalancer": {
+      "Value": {
+        "Ref": "LoadBalancer"
+      }
+    },
+    "CloudFrontURL": {
+      "Value": {
+        "Fn::GetAtt": [
+          "CloudfrontDistribution",
+          "DomainName"
+        ]
+      }
+    },
+    "CloudWatchEndpoint": {
+      "Value": {
+        "Fn::Join": [
+          ".",
+          [
+            "monitoring",
+            {
+              "Ref": "AWS::Region"
+            },
+            "amazonaws.com"
+          ]
+        ]
+      }
+    },
+    "SnsBounceTopicArn": {
+      "Value": {
+        "Ref": "SnsBounceTopic"
+      },
+      "Description": "ARN of the SNS topic which holds subscription to the SQS queue for notifications to flow from SES"
+    },
+    "SnsComplaintTopicArn": {
+      "Value": {
+        "Ref": "SnsComplaintTopic"
+      },
+      "Description": "ARN of the SNS topic which holds subscription to the SQS queue for notifications to flow from SES"
+    },
+    "SnsDeliveredTopicArn": {
+      "Value": {
+        "Ref": "SnsDeliveredTopic"
+      },
+      "Description": "ARN of the SNS topic which holds subscription to the SQS queue for notifications to flow from SES"
+    },
+    "SqsDeliveredQueueUrl": {
+      "Value": {
+        "Ref": "SqsDeliveredQueue"
+      },
+      "Description": "SQS queue URL for job tracking"
+    },
+    "SqsBounceQueueUrl": {
+      "Value": {
+        "Ref": "SqsBounceQueue"
+      },
+      "Description": "SQS queue URL for job tracking"
+    },
+    "SqsComplaintQueueUrl": {
+      "Value": {
+        "Ref": "SqsComplaintQueue"
+      },
+      "Description": "SQS queue URL for job tracking"
+    }
+  }
+}
