@@ -1,0 +1,238 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'AWS Cloudformation to Create Athena Tables for SSM'
+Parameters:
+  SSMBucketName:
+    Type: "String"
+    Description: "S3 bucket for application assets and uploads."
+    MinLength: "3"
+    MaxLength: "255"
+    AllowedPattern: "[\\x20-\\x7E]*"
+    ConstraintDescription: "can contain only ASCII characters."
+Resources:
+  S3Bucket:
+    Type: "AWS::S3::Bucket"
+    Properties:
+      BucketName: !Ref SSMBucketName
+      AccessControl: "PublicRead"
+      Tags:
+        -  Key: "Name"
+           Value: "SSM S3 Bucket"
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders:
+              "Authorization"
+          - AllowedOrigins:
+              "*"
+          - AllowedMethods:
+              "GET"
+          - MaxAge: "3000"
+  BucketPolicy:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      PolicyDocument:
+        Id: SSMBucketPolicy
+        Version: "2012-10-17"
+        Statement:
+          - Sid: "SSMBucktePermissionsCheck"
+            Effect: "Allow"
+            Principle:
+              Service: "ssm.amazonaws.com"
+            Action: "s3:GetbucketAcl"
+            Resource: !Join
+              - ''
+              - - !Ref SSMBucketName
+          - Sid: "SSMBucketDelivery"
+            Efect: "Allow"
+            Principal:
+              Service: "ssm.amazonaws.com"
+            Action: "s3:PutObject"
+            Resource: !Join
+              - ''
+              - - 'arn:aws:s3:::'
+                - !Ref SSMBucketName
+            Condition:
+              StringEquals:
+                "s3:x-amz-acl": "bucket-owner-full-control"
+          - Sid: "AWSCloudTrailAclCheck20150319"
+            Effect: "Allow"
+            Principal:
+              Service: "cloudtrail.amazonaws.com"
+            Action: "s3:GetBucketAcl"
+            Resource: !Join
+              - ''
+              - - 'arn:aws:s3:::'
+                - !Ref SSMBucketName
+          - Sid: "AWSCloudTrailWrite20150319"
+            Effect: "Allow"
+            Principal:
+              Service: "cloudtrail.amazonaws.com"
+            Action: "s3:PutObject"
+            Resource: !Join
+              - ''
+              - - 'arn:aws:s3:::'
+                - !Ref SSMBucketName
+                - ''/uswest2-cmdb/AWSLogs/'
+                - !Ref account
+                - /*
+            Condition:
+              StringEquals:
+                "s3:x-amz-acl": "bucket-owner-full-control"
+  AthenaNamedQuery:
+    Type: AWS::Athena::NamedQuery
+    Properties:
+      Database: 'default'
+      Description: "Create the AWS_Application table"
+      Name: "CreateApplicationTable"
+      QueryString: !Join
+        - ''
+        - -        'CREATE EXTERNAL TABLE IF NOT EXISTS default.AWS_Application (
+                      "ResourceId" string,
+                      "Name" string,
+                      "ApplicationType" string,
+                      "Publisher" string,
+                      "Version" string,
+                      "InstalledTime" string,
+                      "Architecture" string,
+                      "URL" string
+                    )
+                    PARTITIONED BY (AccountId string, Region string, ResourceType string)
+                    ROW FORMAT SERDE "org.openx.data.jsonserde.JsonSerDe"
+                    WITH SERDEPROPERTIES (
+                      "serialization.format" = "1"
+                    ) LOCATION "s3://"'
+          -         !Ref SSMBucketName
+          -         '/AWS:Application/
+
+                    MSCK REPAIR TABLE default.AWS_Application
+
+
+                    CREATE EXTERNAL TABLE IF NOT EXISTS default.AWS_AWSComponent (
+                      "ResourceId" string,
+                      "Name" string,
+                      "ApplicationType" string,
+                      "Publisher" string,
+                      "Version" string,
+                      "InstalledTime" string,
+                      "Architecture" string,
+                      "URL" string
+                    )
+                    PARTITIONED BY (AccountId string, Region string, ResourceType string)
+                    ROW FORMAT SERDE "org.openx.data.jsonserde.JsonSerDe"
+                    WITH SERDEPROPERTIES (
+                      "serialization.format" = "1"
+                    ) LOCATION "s3://"'
+            -       !Ref SSMBucketName
+            -       '/AWS:AWSComponent/
+
+                    MSCK REPAIR TABLE default.AWS_AWSComponent
+
+                    CREATE EXTERNAL TABLE IF NOT EXISTS default.AWS_WindowsUpdate (
+                      "ResourceId" string,
+                      "HotFixId" string,
+                      "Description" string,
+                      "InstalledTime" string,
+                      "InstalledBy" string
+                    )
+                    PARTITIONED BY (AccountId string, Region string, ResourceType string)
+                    ROW FORMAT SERDE "org.openx.data.jsonserde.JsonSerDe"
+                    WITH SERDEPROPERTIES (
+                      "serialization.format" = "1"
+                    ) LOCATION "s3://"'
+            -       !Ref SSMBucketName
+                    '/WindowsUpdate/AWS:WindowsUpdate/
+
+                    MSCK REPAIR TABLE default.AWS_WindowsUpdate
+
+                    CREATE EXTERNAL TABLE IF NOT EXISTS default.AWS_InstanceInformation (
+                      "AgentType" string,
+                      "AgentVersion" string,
+                      "ComputerName" string,
+                      "IamRole" string,
+                      "InstanceId" string,
+                      "IpAddress" string,
+                      "PlatformName" string,
+                      "PlatformType" string,
+                      "PlatformVersion" string
+                    )
+                    PARTITIONED BY (AccountId string, Region string, ResourceType string)
+                    ROW FORMAT SERDE "org.openx.data.jsonserde.JsonSerDe"
+                    WITH SERDEPROPERTIES (
+                      "serialization.format" = "1"
+                    ) LOCATION "s3://"'
+            -       !Ref SSMBucketName
+            -       '/AWS:InstanceInformation/
+
+                    MSCK REPAIR TABLE default.AWS_InstanceInformation
+
+                    CREATE EXTERNAL TABLE IF NOT EXISTS default.AWS_Network (
+                      "ResourceId" string,
+                      "Name" string,
+                      "SubnetMask" string,
+                      "Gateway" string,
+                      "DHCPServer" string,
+                      "DNSServer" string,
+                      "MacAddress" string,
+                      "IPV4" string,
+                      "IPV6" string
+                    )
+                    PARTITIONED BY (AccountId string, Region string, ResourceType string)
+                    ROW FORMAT SERDE "org.openx.data.jsonserde.JsonSerDe"
+                    WITH SERDEPROPERTIES (
+                      "serialization.format" = "1"
+                    ) LOCATION "s3://"'
+              -     !Ref SSMBucketName
+              -     '/AWS:Network/
+
+                    MSCK REPAIR TABLE default.AWS_Network
+
+                    CREATE EXTERNAL TABLE IF NOT EXISTS default.AWS_PatchCompliance (
+                      "ResourceId" string,
+                      "Title" string,
+                      "KBId" string,
+                      "Classification" string,
+                      "Severity" string,
+                      "State" string,
+                      "InstalledTime" string
+                    )
+                    PARTITIONED BY (AccountId string, Region string, ResourceType string)
+                    ROW FORMAT SERDE "org.openx.data.jsonserde.JsonSerDe"
+                    WITH SERDEPROPERTIES (
+                      "serialization.format" = "1"
+                    ) LOCATION "s3://"'
+              -     !Ref SSMBucketName
+              -     '/AWS:PatchCompliance/
+
+                    MSCK REPAIR TABLE default.AWS_PatchCompliance
+
+                    CREATE EXTERNAL TABLE IF NOT EXISTS default.AWS_PatchSummary (
+                      "ResourceId" string,
+                      "PatchGroup" string,
+                      "BaselineId" string,
+                      "SnapshotId" string,
+                      "OwnerInformation" string,
+                      "InstalledCount" int,
+                      "InstalledOtherCount" int,
+                      "NotApplicableCount" int,
+                      "MissingCount" int,
+                      "FailedCount" int,
+                      "OperationType" string,
+                      "OperationStartTime" string,
+                      "OperationEndTime" string
+                    )
+                    PARTITIONED BY (AccountId string, Region string, ResourceType string)
+                    ROW FORMAT SERDE 'org.openx.data.jsonserde.JsonSerDe'
+                    WITH SERDEPROPERTIES (
+                      "serialization.format" = "1"
+                    ) LOCATION "s3://"'
+              -     !Ref SSMBucketName
+              -     '/AWS:PatchSummary/
+
+                    MSCK REPAIR TABLE default.AWS_PatchSummary'
+  Outputs:
+    S3BucketSecureURL:
+      Value: !Join
+        - ''
+        - - 'https://'
+          - !GetAtt
+            - S3Bucket
+            - DomainName
