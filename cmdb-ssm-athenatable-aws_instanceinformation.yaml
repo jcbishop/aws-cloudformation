@@ -1,0 +1,61 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'AWS Cloudformation to Create Athena InstanceInformation Table for SSM'
+Parameters:
+  SSMDataBaseName:
+    Type: "String"
+    Description: "Athena Database Name"
+    MinLength: "2"
+    MaxLength: "31"
+    AllowedPattern: "[\\x20-\\x7E]*"
+    ConstraintDescription: "Can only contain ASCII characters"
+    Default: default
+  Environment:
+    Type: "String"
+    AllowedValues:
+      - dev
+      - qa
+      - prod
+    Description: "Which Environment?"
+Resources:
+  AthenaNamedQuery:
+    Type: AWS::Athena::NamedQuery
+    Properties:
+      Database: !Ref SSMDataBaseName
+      Description: "Create the AWS_InstanceInformation table"
+      Name: "CreateInstanceInformation"
+      QueryString:
+        Fn::Sub:
+          - |
+                CREATE EXTERNAL TABLE IF NOT EXISTS ${SSMDataBaseName}.AWS_InstanceInformation (
+                  `AgentType` string,
+                  `AgentVersion` string,
+                  `ComputerName` string,
+                  `IamRole` string,
+                  `InstanceId` string,
+                  `IpAddress` string,
+                  `PlatformName` string,
+                  `PlatformType` string,
+                  `PlatformVersion` string
+                )
+                PARTITIONED BY (AccountId string, Region string, ResourceType string)
+                ROW FORMAT SERDE 'org.openx.data.jsonserde.JsonSerDe'
+                WITH SERDEPROPERTIES (
+                  'serialization.format' = '1'
+                ) LOCATION 's3://${S3Bucket}/AWS:InstanceInformation/'
+          - S3Bucket:
+              Fn::ImportValue:
+                Fn::Sub: "SSMS3Bucket${Environment}"
+  InstanceInformationTableFixQuery:
+    Type: AWS::Athena::NamedQuery
+    Properties:
+      Database: !Ref SSMDataBaseName
+      Description: "Fix InstanceInformation Table"
+      Name: "FixInstanceInformationTable"
+      QueryString: !Sub |
+                    MSCK REPAIR TABLE ${SSMDataBaseName}.AWS_InstanceInformation
+Outputs:
+  SSMAthenaApplicationTable:
+    Value: !Ref AthenaNamedQuery
+    Description: "Named query for creating the AWS_InstanceInformation Table"
+    Export:
+      Name: !Sub SSMAthena-InstanceInformationTable-${Environment}

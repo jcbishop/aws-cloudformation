@@ -1,0 +1,72 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'AWS Cloudformation to Create Athena Tables for SSM'
+Parameters:
+  SSMBucketName:
+    Type: "String"
+    Description: "S3 bucket for application assets and uploads."
+    MinLength: "3"
+    MaxLength: "255"
+    AllowedPattern: "[\\x20-\\x7E]*"
+    ConstraintDescription: "can contain only ASCII characters."
+    Default: "infor-drop-point"
+  Environment:
+    Type: "String"
+    Description: "One of Dev QA Prod"
+    AllowedValues:
+      - "dev"
+      - "qa"
+      - "prod"
+    Default: "dev"
+Resources:
+  S3Bucket:
+    Type: "AWS::S3::Bucket"
+    Properties:
+      BucketName: !Sub ${SSMBucketName}-${Environment}
+      AccessControl: "PublicRead"
+      Tags:
+        -  Key: "Name"
+           Value: "SSM S3 Bucket"
+#  BucketPolicy:
+#    Type: 'AWS::S3::Bucket'
+##    Properties:
+#      BucketName: !Ref SSMBucketName
+#      PolicyDocument:
+#        Id: SSMBucketPolicy
+#        Version: "2012-10-17"
+#        Statement:
+#          - Sid: "SSMBucktePermissionsCheck"
+#            Effect: "Allow"
+#            Principle:
+#              Service: "ssm.amazonaws.com"
+##            Action: "s3:GetbucketAcl"
+#            Resource: !Sub arn:aws:s3:::${SSMBucketName}
+#          - Sid: "SSMBucketDelivery"
+#            Efect: "Allow"
+#            Principal:
+#              Service: "ssm.amazonaws.com"
+#            Action: "s3:PutObject"
+#            Resource: !Sub arn:aws:s3:::${SSMBucketName}
+#            Condition:
+#              StringEquals:
+#                "s3:x-amz-acl": "bucket-owner-full-control"
+#          - Sid: "AWSCloudTrailAclCheck20150319"
+#            Effect: "Allow"
+#            Principal:
+#              Service: "cloudtrail.amazonaws.com"
+#            Action: "s3:GetBucketAcl"
+#            Resource: !Sub arn:aws:s3:::${SSMBucketName}
+#          - Sid: "AWSCloudTrailWrite20150319"
+#            Effect: "Allow"
+#            Principal:
+#              Service: "cloudtrail.amazonaws.com"
+#            Action: "s3:PutObject"
+#            Resource: !Sub arn:aws:s3:::${SSMBucketName}/uswest2-cmdb/AWSLogs/${AWS::AccountId}/*
+#            Condition:
+#              StringEquals:
+#                "s3:x-amz-acl": "bucket-owner-full-control"
+Outputs:
+  SSMS3Bucketn :
+    Value: !Ref S3Bucket
+    Description: Name of the sample Amazon S3 bucket with a lifecycle configuration.
+    Export:
+      Name: !Sub SSMS3Bucket${Environment}
