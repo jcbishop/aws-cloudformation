@@ -1,0 +1,66 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'AWS Cloudformation to Create Athena Network Table for SSM'
+Parameters:
+  SSMDataBaseName:
+    Type: "String"
+    Description: "Athena Database Name"
+    MinLength: "2"
+    MaxLength: "31"
+    AllowedPattern: "[\\x20-\\x7E]*"
+    ConstraintDescription: "Can only contain ASCII characters"
+    Default: default
+  Environment:
+    Type: "String"
+    AllowedValues:
+      - dev
+      - qa
+      - prod
+    Description: "Which Environment?"
+Resources:
+  AthenaNamedQuery:
+    Type: AWS::Athena::NamedQuery
+    Properties:
+      Database: !Ref SSMDataBaseName
+      Description: "Create the AWS_Network table"
+      Name: "CreateNetworkTable"
+      QueryString:
+        Fn::Sub:
+          - |
+                CREATE EXTERNAL TABLE IF NOT EXISTS ${SSMDataBaseName}.AWS_Network (
+                  `ResourceId` string,
+                  `Name` string,
+                  `SubnetMask` string,
+                  `Gateway` string,
+                  `DHCPServer` string,
+                  `DNSServer` string,
+                  `MacAddress` string,
+                  `IPV4` string,
+                  `IPV6` string
+                )
+                PARTITIONED BY (AccountId string, Region string, ResourceType string)
+                ROW FORMAT SERDE 'org.openx.data.jsonserde.JsonSerDe'
+                WITH SERDEPROPERTIES (
+                  'serialization.format' = '1'
+                ) LOCATION 's3://${S3Bucket}/AWS:Network/'
+          - S3Bucket:
+              Fn::ImportValue:
+                Fn::Sub: "SSMS3Bucket${Environment}"
+  NetworkTableFixQuery:
+    Type: AWS::Athena::NamedQuery
+    Properties:
+      Database: !Ref SSMDataBaseName
+      Description: "Fix Network Table"
+      Name: "FixNetworkTable"
+      QueryString: !Sub |
+                    MSCK REPAIR TABLE ${SSMDataBaseName}.AWS_Network
+Outputs:
+  SSMAthenaNetworkTable:
+    Value: !Ref AthenaNamedQuery
+    Description: "Named query for creating the AWS_Network Table"
+    Export:
+      Name: !Sub SSMAthena-NetworkTable-${Environment}
+  SSMFixNetworkTable:
+    Value: !Ref NetworkTableFixQuery
+    Description: "Named Query for fixing the AWS_Network Table"
+    Export:
+      Name: !Sub SSMAthena-FixNetworkTable-${Environment}
